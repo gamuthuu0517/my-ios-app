@@ -1,21 +1,35 @@
 import { h, formatBytes } from '../dom';
+import { getMedia } from '../db';
+
+function hashParam(name: string): string | null {
+  const q = location.hash.split('?')[1];
+  return q ? new URLSearchParams(q).get(name) : null;
+}
 
 export function gifView(): HTMLElement {
   const info = h('div', { class: 'card hidden' });
   const fileInput = h('input', { type: 'file', accept: 'video/*', class: 'hidden' });
 
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
+  const show = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
     const video = h('video', { src: url, controls: true, playsinline: true, muted: true, class: 'preview' });
     const meta = h('div', { class: 'muted small' }, '読み込み中…');
     video.addEventListener('loadedmetadata', () => {
-      meta.textContent = `${video.videoWidth}×${video.videoHeight} ・ ${video.duration.toFixed(2)}秒 ・ ${formatBytes(file.size)}`;
+      meta.textContent = `${video.videoWidth}×${video.videoHeight} ・ ${video.duration.toFixed(2)}秒 ・ ${formatBytes(blob.size)}`;
     });
-    info.replaceChildren(h('div', { class: 'label' }, file.name), video, meta);
+    info.replaceChildren(h('div', { class: 'label' }, name), video, meta);
     info.classList.remove('hidden');
+  };
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    if (file) show(file, file.name);
   });
+
+  const id = hashParam('id');
+  if (id) {
+    getMedia(id).then((r) => r && show(r.blob, r.title));
+  }
 
   return h(
     'section',

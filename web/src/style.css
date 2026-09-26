@@ -156,3 +156,19 @@ body {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
   z-index: 30;
 }
+
+.btn.danger { color: var(--warn); }
+a.btn { text-align: center; text-decoration: none; }
+.card.error { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); text-decoration: none; display: block; }
+.ok { color: #2f9e44; font-weight: 600; }
+.actions { display: flex; gap: 8px; }
+.actions > * { flex: 1; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.item-head { display: flex; gap: 12px; align-items: center; }
+.item-head input { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
+.item-meta { min-width: 0; flex: 1; }
+.thumb { width: 96px; height: 64px; flex: none; border-radius: 8px; object-fit: cover; background: var(--border); }
+.thumb.blank { visibility: hidden; }
+.select { appearance: none; -webkit-appearance: none; }
+.progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.media .preview { max-height: 40vh; }

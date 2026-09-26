@@ -36,7 +36,7 @@ for (const [key, r] of Object.entries(routes) as [Route, (typeof routes)[Route]]
 }
 
 function currentRoute(): Route {
-  const key = location.hash.slice(1);
+  const key = location.hash.slice(1).split('?')[0];
   return key in routes ? (key as Route) : 'download';
 }
 
@@ -60,6 +60,9 @@ app.append(...[installHint, main, tabs].filter((x): x is HTMLElement => !!x));
 render();
 
 if (loadSettings().debugConsole) enableDebugConsole();
+
+// アプリ内の動画が iOS に勝手に消されにくくする
+navigator.storage?.persist?.().catch(() => {});
 
 // 新しいバージョンが公開されたら更新ボタンを出す
 const updateSW = registerSW({
