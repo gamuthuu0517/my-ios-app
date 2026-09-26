@@ -7,9 +7,9 @@ RUN apt-get update \
 COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
 
 WORKDIR /app
-COPY requirements.txt .
+COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app ./app
+COPY server/app ./app
 
 ENV PYTHONUNBUFFERED=1
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
