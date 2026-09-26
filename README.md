@@ -13,3 +13,7 @@ cd web
 npm ci
 npm run dev
 ```
+
+## サーバーの動作確認
+
+`GET /api/health` が `{"ok": true, ...}` を返せば起動しています（合言葉は不要）。
