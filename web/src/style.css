@@ -189,3 +189,30 @@ a.btn { text-align: center; text-decoration: none; }
 .sub-item { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
 .thumb.small { width: 72px; height: 48px; }
 .card .card { margin-bottom: 0; background: var(--bg); }
+
+/* GIF 変換 */
+.row.between { justify-content: space-between; align-items: center; }
+.summary { display: flex; flex-direction: column; gap: 6px; }
+.summary .row > span:last-child { text-align: right; }
+.warn:empty { display: none; }
+.warn { white-space: pre-line; }
+.slider { width: 100%; accent-color: var(--accent); }
+.preview.gif { background: repeating-conic-gradient(var(--border) 0% 25%, transparent 0% 50%) 50% / 16px 16px; object-fit: contain; -webkit-touch-callout: default; }
+.trimmer { display: flex; flex-direction: column; gap: 10px; }
+.tl-wrap { overflow-x: auto; overflow-y: hidden; touch-action: pan-x; border-radius: 10px; -webkit-overflow-scrolling: touch; }
+.tl-track { position: relative; height: 64px; width: 100%; margin: 0 14px; width: calc(100% - 28px); }
+.tl-strip { position: absolute; inset: 4px 0; overflow: hidden; border-radius: 6px; background: var(--border); }
+.tl-thumb { position: absolute; top: 0; height: 100%; object-fit: cover; }
+.tl-dim { position: absolute; top: 4px; bottom: 4px; background: rgb(0 0 0 / 0.55); pointer-events: none; }
+.tl-sel { position: absolute; top: 0; bottom: 0; border-top: 4px solid var(--accent); border-bottom: 4px solid var(--accent); pointer-events: none; box-sizing: border-box; }
+.tl-handle { position: absolute; top: 0; bottom: 0; width: 44px; margin-left: -22px; touch-action: none; display: flex; justify-content: center; z-index: 2; }
+.tl-handle span { width: 14px; height: 100%; background: var(--accent); border-radius: 6px; box-shadow: 0 0 0 2px rgb(255 255 255 / 0.6) inset; }
+.tl-handle.start span { border-radius: 6px 2px 2px 6px; transform: translateX(-6px); }
+.tl-handle.end span { border-radius: 2px 6px 6px 2px; transform: translateX(6px); }
+.tl-handle.active span { filter: brightness(1.2); }
+.tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; pointer-events: none; z-index: 1; }
+.tl-zoom { display: flex; justify-content: space-between; align-items: center; }
+.tl-zoom .row { align-items: center; gap: 8px; }
+.tl-step { display: flex; align-items: center; gap: 8px; }
+.tl-step .label { width: 2.5em; flex: none; }
+.input.time { flex: 1; min-width: 0; text-align: center; font-variant-numeric: tabular-nums; padding: 8px; }

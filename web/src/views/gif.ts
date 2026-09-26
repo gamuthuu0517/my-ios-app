@@ -1,48 +1,435 @@
-import { h, formatBytes } from '../dom';
-import { getMedia } from '../db';
+import { h, toast, formatBytes } from '../dom';
+import { deleteMedia, getMedia, newId, putMedia } from '../db';
+import { loadSettings } from '../settings';
+import { shareFile } from '../share';
+import { FrameGrabber } from '../gif/frames';
+import { detectFps } from '../gif/mp4info';
+import { Cancelled, encodeGif, estimateGifSize, type GifOptions } from '../gif/encoder';
+import { frameTimes, outputSize } from '../gif/timing';
+import { Trimmer, formatTime } from './trimmer';
+
+const MAX_SEC = 30;
+
+/** 画面を切り替えても続きから再開できるよう、変換中の状態は画面の外に持つ */
+interface Session {
+  blob: Blob;
+  name: string;
+  mediaId?: string; // アプリ内の動画から来た場合
+  srcW: number;
+  srcH: number;
+  duration: number;
+  srcFps: number | null;
+  start: number;
+  end: number;
+  percent: number;
+  fpsChoice: string; // 'auto' または数値
+  dither: boolean;
+  estimate?: { key: string; bytes: number | null };
+  job?: { progress: number; cancel: { cancelled: boolean }; promise: Promise<void> };
+  result?: { blob: Blob; id: string; opts: GifOptions };
+  error?: string;
+}
+
+let session: Session | null = null;
+let grabber: FrameGrabber | null = null; // 予測・変換用（session と同じ動画）
+const listeners = new Set<() => void>();
+const notify = () => listeners.forEach((l) => l());
+const progressListeners = new Set<() => void>();
+
+// 予測と変換が同じ video を同時にシークしないよう、順番に使う
+let grabberLock: Promise<unknown> = Promise.resolve();
+function withGrabber<T>(fn: (g: FrameGrabber) => Promise<T>): Promise<T> {
+  const run = grabberLock.then(() => {
+    if (!grabber) throw new Error('動画が読み込まれていません');
+    return fn(grabber);
+  });
+  grabberLock = run.catch(() => undefined);
+  return run;
+}
 
 function hashParam(name: string): string | null {
   const q = location.hash.split('?')[1];
   return q ? new URLSearchParams(q).get(name) : null;
 }
 
-export function gifView(): HTMLElement {
-  const info = h('div', { class: 'card hidden' });
-  const fileInput = h('input', { type: 'file', accept: 'video/*', class: 'hidden' });
+function targetFps(s: Session): number {
+  const src = s.srcFps ?? 30;
+  if (s.fpsChoice === 'auto') return Math.min(30, Math.round(src * 100) / 100);
+  return Math.min(Number(s.fpsChoice), src);
+}
 
-  const show = (blob: Blob, name: string) => {
-    const url = URL.createObjectURL(blob);
-    const video = h('video', { src: url, controls: true, playsinline: true, muted: true, class: 'preview' });
-    const meta = h('div', { class: 'muted small' }, '読み込み中…');
-    video.addEventListener('loadedmetadata', () => {
-      meta.textContent = `${video.videoWidth}×${video.videoHeight} ・ ${video.duration.toFixed(2)}秒 ・ ${formatBytes(blob.size)}`;
-    });
-    info.replaceChildren(h('div', { class: 'label' }, name), video, meta);
-    info.classList.remove('hidden');
+function options(s: Session): GifOptions {
+  const { w, h } = outputSize(s.srcW, s.srcH, s.percent);
+  return { start: s.start, end: s.end, fps: targetFps(s), width: w, height: h, dither: s.dither };
+}
+
+async function openSource(blob: Blob, name: string, mediaId?: string): Promise<void> {
+  if (session?.job) return toast('変換中です。終わってから選び直してください');
+  grabber?.close();
+  grabber = null;
+  const g = await FrameGrabber.open(blob);
+  const srcFps = await detectFps(blob);
+  const s = loadSettings();
+  session = {
+    blob,
+    name,
+    mediaId,
+    srcW: g.width,
+    srcH: g.height,
+    duration: g.duration,
+    srcFps,
+    start: 0,
+    end: Math.min(g.duration, MAX_SEC),
+    percent: s.gifScalePercent,
+    fpsChoice: 'auto',
+    dither: s.gifDither,
   };
+  grabber = g;
+  notify();
+}
 
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    if (file) show(file, file.name);
+export function gifView(): HTMLElement {
+  const root = h('section', { class: 'view' });
+  const fileInput = h('input', { type: 'file', accept: 'video/*', class: 'hidden' });
+  fileInput.addEventListener('change', async () => {
+    const f = fileInput.files?.[0];
+    fileInput.value = '';
+    if (!f) return;
+    try {
+      await openSource(f, f.name);
+    } catch (e) {
+      toast((e as Error).message);
+    }
   });
 
-  const id = hashParam('id');
-  if (id) {
-    getMedia(id).then((r) => r && show(r.blob, r.title));
-  }
+  let mounted = false;
+  requestAnimationFrame(() => (mounted = true));
+  const render = () => {
+    if (mounted && !root.isConnected) {
+      listeners.delete(render);
+      return;
+    }
+    root.replaceChildren(
+      h('h1', {}, 'GIF変換'),
+      h(
+        'div',
+        { class: 'card' },
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', onclick: () => fileInput.click() }, session ? '別の動画を選ぶ' : '写真から動画を選ぶ'),
+          h('a', { class: 'btn', href: '#history' }, 'アプリ内の動画'),
+        ),
+        session ? h('div', { class: 'muted small clamp' }, session.name) : h('p', { class: 'muted small' }, '写真アプリの動画、またはダウンロードした動画（履歴の「GIFにする」）を GIF に変換します。'),
+        fileInput,
+      ),
+      session ? editor(session) : '',
+    );
+  };
+  listeners.add(render);
 
-  return h(
-    'section',
-    { class: 'view' },
-    h('h1', {}, 'GIF変換'),
-    h(
-      'div',
-      { class: 'card' },
-      h('p', {}, '写真アプリの動画を選んで GIF に変換します。'),
-      h('button', { class: 'btn primary', onclick: () => fileInput.click() }, '動画を選択'),
-      fileInput,
+  // 履歴の「GIFにする」から来た場合
+  const id = hashParam('id');
+  if (id && session?.mediaId !== id) {
+    getMedia(id).then(async (r) => {
+      if (!r) return;
+      try {
+        await openSource(r.blob, r.title, r.id);
+      } catch (e) {
+        toast((e as Error).message);
+      }
+    });
+  }
+  render();
+  return root;
+}
+
+function editor(s: Session): HTMLElement {
+  const box = h('div');
+  const url = URL.createObjectURL(s.blob);
+  const video = h('video', { src: url, class: 'preview', playsinline: true, muted: true, preload: 'auto' });
+  let looping = false;
+
+  // 選択範囲だけを繰り返し再生
+  const playBtn = h('button', { class: 'btn small' }, '▶ 範囲を再生');
+  const stopLoop = () => {
+    looping = false;
+    video.pause();
+    playBtn.textContent = '▶ 範囲を再生';
+  };
+  playBtn.addEventListener('click', () => {
+    if (looping) return stopLoop();
+    looping = true;
+    playBtn.textContent = '■ 停止';
+    video.currentTime = s.start;
+    void video.play();
+  });
+  video.addEventListener('timeupdate', () => {
+    trimmer.setPlayhead(video.currentTime);
+    if (looping && video.currentTime >= s.end) {
+      video.currentTime = s.start;
+      void video.play();
+    }
+  });
+
+  const frameStep = 1 / (s.srcFps ?? 30);
+  const trimmer = new Trimmer({
+    duration: s.duration,
+    frameStep,
+    start: s.start,
+    end: s.end,
+    onChange: (a, b) => {
+      s.start = a;
+      s.end = b;
+      s.result = undefined;
+      refresh();
+    },
+    onScrub: (t) => {
+      if (looping) stopLoop();
+      video.currentTime = t;
+      trimmer.setPlayhead(t);
+      s.start = trimmer.start;
+      s.end = trimmer.end;
+      refreshSummary();
+    },
+  });
+  void makeStrip(s.blob, s.duration, s.srcW, s.srcH).then((c) => trimmer.setThumbnails(c));
+
+  // 変換設定
+  const percent = h('input', { type: 'range', min: 1, max: 100, value: s.percent, class: 'slider' });
+  const percentLabel = h('span', { class: 'label' });
+  const setPercent = (p: number) => {
+    s.percent = p;
+    percent.value = String(p);
+    refresh();
+  };
+  percent.addEventListener('input', () => setPercent(Number(percent.value)));
+  const presets = h('div', { class: 'row' }, ...[100, 75, 50, 25].map((p) => h('button', { class: 'btn small', onclick: () => setPercent(p) }, `${p}%`)));
+
+  const fps = h('select', { class: 'input select' });
+  const src = s.srcFps ? Math.round(s.srcFps * 100) / 100 : null;
+  fps.append(h('option', { value: 'auto' }, src ? `元のまま（${src}fps${src > 30 ? ' → 30fps' : ''}）` : '元のまま（上限30fps）'));
+  for (const f of [30, 24, 20, 15, 10]) if (!src || f < src - 0.5) fps.append(h('option', { value: String(f) }, `${f}fps`));
+  fps.value = s.fpsChoice;
+  fps.addEventListener('change', () => {
+    s.fpsChoice = fps.value;
+    refresh();
+  });
+
+  const dither = h('input', { type: 'checkbox', checked: s.dither });
+  dither.addEventListener('change', () => {
+    s.dither = dither.checked;
+    refresh();
+  });
+
+  // 概要（長さ・フレーム数・予測容量）
+  const summary = h('div', { class: 'summary' });
+  const warn = h('div', { class: 'warn small' });
+  const convertBtn = h('button', { class: 'btn primary block' }, 'GIFに変換');
+  const progressBox = h('div');
+  const resultBox = h('div');
+
+  const refreshSummary = () => {
+    const o = options(s);
+    const n = frameTimes(o.start, o.end, o.fps).length;
+    const len = o.end - o.start;
+    const est = s.estimate?.key === estimateKey(s) ? s.estimate.bytes : undefined;
+    const estText =
+      est === undefined ? '計算中…' : est === null ? '—' : `約 ${formatBytes(est)}（${formatBytes(est * 0.8)}〜${formatBytes(est * 1.2)}）`;
+    percentLabel.textContent = `${s.percent}% → ${o.width}×${o.height}`;
+    summary.replaceChildren(
+      row('範囲', `${formatTime(o.start)} 〜 ${formatTime(o.end)}（${len.toFixed(2)}秒）`),
+      row('出力', `${o.width}×${o.height} ・ ${Math.round(o.fps * 100) / 100}fps ・ ${n}コマ`),
+      row('予測容量', estText),
+    );
+    const warnings: string[] = [];
+    if (len > MAX_SEC + 0.001) warnings.push(`選択が${MAX_SEC}秒を超えています（容量が大きくなります）`);
+    const limit = loadSettings().sizeWarnMB * 1024 * 1024;
+    if (est && est > limit) warnings.push(`予測容量が ${loadSettings().sizeWarnMB}MB を超えています。解像度かfpsを下げると小さくなります`);
+    warn.textContent = warnings.join('\n');
+  };
+
+  let estTimer: ReturnType<typeof setTimeout> | undefined;
+  const refresh = () => {
+    refreshSummary();
+    clearTimeout(estTimer);
+    const key = estimateKey(s);
+    if (s.estimate?.key === key) return;
+    estTimer = setTimeout(async () => {
+      if (!grabber || s.job) return;
+      const bytes = await withGrabber((g) => estimateGifSize(g, options(s), () => estimateKey(s) !== key || !!s.job)).catch(
+        () => null,
+      );
+      if (estimateKey(s) !== key) return;
+      s.estimate = { key, bytes };
+      refreshSummary();
+    }, 500);
+  };
+
+  convertBtn.addEventListener('click', async () => {
+    if (!grabber || s.job) return;
+    const o = options(s);
+    if (o.end - o.start > MAX_SEC + 0.001 && !confirm(`${MAX_SEC}秒を超えています。容量が大きくなりますが変換しますか？`)) return;
+    stopLoop();
+    const cancel = { cancelled: false };
+    s.error = undefined;
+    s.result = undefined;
+    const job = {
+      progress: 0,
+      cancel,
+      promise: (async () => {
+        try {
+          const blob = await withGrabber((g) =>
+            encodeGif(g, o, (r) => {
+              job.progress = r;
+              progressListeners.forEach((l) => l());
+            }, cancel),
+          );
+          const id = newId();
+          await putMedia({
+            id,
+            kind: 'gif',
+            blob,
+            name: `${s.name.replace(/\.[^.]+$/, '')}.gif`,
+            title: s.name.replace(/\.[^.]+$/, ''),
+            width: o.width,
+            height: o.height,
+            duration: o.end - o.start,
+            createdAt: Date.now(),
+          });
+          s.result = { blob, id, opts: o };
+        } catch (e) {
+          if (!(e instanceof Cancelled)) s.error = `変換に失敗しました：${(e as Error).message}`;
+        } finally {
+          s.job = undefined;
+          notify();
+        }
+      })(),
+    };
+    s.job = job;
+    notify();
+  });
+
+  const showProgress = () => {
+    const job = s.job;
+    if (!job) return progressBox.replaceChildren();
+    const bar = progressBox.querySelector('progress');
+    if (bar) {
+      bar.value = job.progress;
+      progressBox.querySelector('.pct')!.textContent = `${Math.round(job.progress * 100)}%`;
+      return;
+    }
+    progressBox.replaceChildren(
+      h('div', { class: 'card' },
+        h('div', { class: 'row between' }, h('span', { class: 'label' }, '変換中…'), h('span', { class: 'pct label' }, '0%')),
+        h('progress', { class: 'progress', max: 1, value: job.progress }),
+        h('p', { class: 'muted small' }, '他のタブに移っても変換は続きます（アプリを閉じると中断します）'),
+        h('button', { class: 'btn', onclick: () => (job.cancel.cancelled = true) }, 'キャンセル'),
+      ),
+    );
+  };
+
+  const showResult = () => {
+    if (s.error) return resultBox.replaceChildren(h('div', { class: 'card error' }, s.error));
+    if (!s.result) return resultBox.replaceChildren();
+    const r = s.result;
+    const gifUrl = URL.createObjectURL(r.blob);
+    const delBtn = s.mediaId
+      ? h('button', { class: 'btn danger' }, '元動画を削除')
+      : null;
+    delBtn?.addEventListener('click', async () => {
+      const rec = await getMedia(s.mediaId!);
+      const msg = rec?.savedToPhotos
+        ? 'アプリ内の元動画を削除します（写真アプリに保存した分は残ります）'
+        : '元動画はまだ写真に保存していません。削除すると元に戻せません。削除しますか？';
+      if (!confirm(msg)) return;
+      await deleteMedia(s.mediaId!);
+      s.mediaId = undefined;
+      toast('元動画を削除しました');
+      showResult();
+    });
+    resultBox.replaceChildren(
+      h('div', { class: 'card' },
+        h('div', { class: 'ok' }, '✓ 変換できました'),
+        h('img', { src: gifUrl, class: 'preview gif', alt: 'GIF' }),
+        h('p', { class: 'muted small' }, '画像を長押し →「写真に追加」で保存できます'),
+        summaryRows(r.blob.size, r.opts),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn primary', onclick: () => shareFile(r.blob, `${s.name.replace(/\.[^.]+$/, '')}.gif`) }, '保存・共有'),
+          delBtn,
+        ),
+        h('p', { class: 'muted small' }, 'GIF は履歴にも保存されています'),
+      ),
+    );
+  };
+
+  box.append(
+    h('div', { class: 'card' },
+      video,
+      h('div', { class: 'row between' }, playBtn, h('span', { class: 'muted small' }, `元：${s.srcW}×${s.srcH}${src ? ` ・ ${src}fps` : ''} ・ ${s.duration.toFixed(2)}秒`)),
+      trimmer.el,
     ),
-    info,
-    h('p', { class: 'muted small' }, '※ トリミング・変換機能は第2段階で実装します（現在は動画の読み込み確認のみ）。'),
+    h('div', { class: 'card' },
+      h('h2', {}, '変換設定'),
+      h('div', { class: 'field' }, h('span', { class: 'label' }, '解像度'), percentLabel, percent, presets),
+      h('label', { class: 'field' }, h('span', { class: 'label' }, 'フレームレート'), fps),
+      h('label', { class: 'switch' }, dither, h('span', {}, 'ディザリング（色の段差をなめらかに）')),
+    ),
+    h('div', { class: 'card' }, summary, warn),
+    s.job ? '' : convertBtn,
+    progressBox,
+    resultBox,
   );
+
+  video.addEventListener('loadedmetadata', () => (video.currentTime = s.start), { once: true });
+  const onProgress = () => {
+    if (!box.isConnected) progressListeners.delete(onProgress);
+    else showProgress();
+  };
+  progressListeners.add(onProgress);
+  refresh();
+  showProgress();
+  showResult();
+  return box;
+}
+
+function estimateKey(s: Session): string {
+  const o = options(s);
+  return JSON.stringify([o.start, o.end, o.fps, o.width, o.height, o.dither]);
+}
+
+function row(label: string, value: string): HTMLElement {
+  return h('div', { class: 'row between small' }, h('span', { class: 'muted' }, label), h('span', {}, value));
+}
+
+function summaryRows(size: number, o: GifOptions): HTMLElement {
+  return h(
+    'div',
+    { class: 'summary' },
+    row('容量', formatBytes(size)),
+    row('解像度', `${o.width}×${o.height}`),
+    row('長さ', `${(o.end - o.start).toFixed(2)}秒 ・ ${frameTimes(o.start, o.end, o.fps).length}コマ ・ ${Math.round(o.fps * 100) / 100}fps`),
+  );
+}
+
+/** タイムライン用のサムネイル（別の video で取り出して、終わったら閉じる） */
+async function makeStrip(blob: Blob, duration: number, w: number, hgt: number): Promise<HTMLCanvasElement[]> {
+  const n = 12;
+  const th = 56;
+  const tw = Math.max(1, Math.round((w / hgt) * th));
+  const g = await FrameGrabber.open(blob);
+  const out: HTMLCanvasElement[] = [];
+  try {
+    for (let i = 0; i < n; i++) {
+      const data = await g.grab(((i + 0.5) / n) * duration, tw, th);
+      const c = document.createElement('canvas');
+      c.width = tw;
+      c.height = th;
+      c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(data), tw, th), 0, 0);
+      c.style.left = `${(i / n) * 100}%`;
+      c.style.width = `${100 / n}%`;
+      out.push(c);
+    }
+  } finally {
+    g.close();
+  }
+  return out;
 }
