@@ -23,6 +23,8 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* ダブルタップでの拡大を無効にする（タップの反応も速くなる） */
+html, body, button, a, input, select, label, .card { touch-action: manipulation; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
@@ -216,3 +218,25 @@ a.btn { text-align: center; text-decoration: none; }
 .tl-step { display: flex; align-items: center; gap: 8px; }
 .tl-step .label { width: 2.5em; flex: none; }
 .input.time { flex: 1; min-width: 0; text-align: center; font-variant-numeric: tabular-nums; padding: 8px; }
+
+/* 画面の切り抜き */
+.crop-stage { position: relative; margin: 0 auto; max-width: 100%; border-radius: 12px; overflow: hidden; background: #000; }
+.stage-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+.crop-overlay { position: absolute; inset: 0; touch-action: none; }
+.crop-box { position: absolute; box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.55); outline: 2px solid #fff; cursor: move; touch-action: none; }
+.crop-grid { position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), rgb(255 255 255 / 0.4) calc(33.33% - 0.5px), rgb(255 255 255 / 0.4) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px), transparent calc(66.66% - 0.5px), rgb(255 255 255 / 0.4) calc(66.66% - 0.5px), rgb(255 255 255 / 0.4) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), rgb(255 255 255 / 0.4) calc(33.33% - 0.5px), rgb(255 255 255 / 0.4) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px), transparent calc(66.66% - 0.5px), rgb(255 255 255 / 0.4) calc(66.66% - 0.5px), rgb(255 255 255 / 0.4) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)); }
+.crop-handle { position: absolute; width: 44px; height: 44px; touch-action: none; }
+.crop-handle::after { content: ''; position: absolute; width: 18px; height: 18px; border: 4px solid #fff; }
+.crop-handle.nw { left: -22px; top: -22px; } .crop-handle.nw::after { left: 18px; top: 18px; border-right: 0; border-bottom: 0; }
+.crop-handle.ne { right: -22px; top: -22px; } .crop-handle.ne::after { right: 18px; top: 18px; border-left: 0; border-bottom: 0; }
+.crop-handle.sw { left: -22px; bottom: -22px; } .crop-handle.sw::after { left: 18px; bottom: 18px; border-right: 0; border-top: 0; }
+.crop-handle.se { right: -22px; bottom: -22px; } .crop-handle.se::after { right: 18px; bottom: 18px; border-left: 0; border-top: 0; }
+.crop-overlay.readonly { pointer-events: none; }
+.crop-overlay.readonly .crop-handle, .crop-overlay.readonly .crop-grid { display: none; }
+.crop-overlay.readonly .crop-box { outline-style: dashed; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+h2.flush { margin: 0; }
+.col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

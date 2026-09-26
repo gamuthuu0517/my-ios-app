@@ -31,7 +31,7 @@ ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGIN", "").split
 MAX_ENTRIES = 50
 
 ALLOWED_HOSTS = re.compile(
-    r"(^|\.)(twitter\.com|x\.com|tiktok\.com|instagram\.com|youtube\.com|youtu\.be)$", re.I
+    r"(^|\.)(twitter\.com|x\.com|tiktok\.com|instagram\.com)$", re.I
 )
 
 app = FastAPI(title="ClipKit server")
@@ -75,7 +75,7 @@ def base_opts() -> dict:
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "noplaylist": True,  # YouTube の「再生リスト付きURL」は単体の動画として扱う
+        "noplaylist": True,
         "playlistend": MAX_ENTRIES,
         "socket_timeout": 30,
     }

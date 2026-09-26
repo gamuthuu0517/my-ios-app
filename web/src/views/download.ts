@@ -21,7 +21,6 @@ const PLATFORMS: { name: string; pattern: RegExp }[] = [
   { name: 'X (Twitter)', pattern: /(^|\.)(twitter\.com|x\.com)$/ },
   { name: 'TikTok', pattern: /(^|\.)tiktok\.com$/ },
   { name: 'Instagram', pattern: /(^|\.)instagram\.com$/ },
-  { name: 'YouTube', pattern: /(^|\.)(youtube\.com|youtu\.be)$/ },
 ];
 
 export function detectPlatform(url: string): string | null {
@@ -56,7 +55,7 @@ export function downloadView(): HTMLElement {
     badge.textContent = input.value
       ? p
         ? `対応サービス：${p}`
-        : '対応していないURLです（X / TikTok / Instagram / YouTube）'
+        : '対応していないURLです（X / TikTok / Instagram）'
       : '';
     badge.classList.toggle('warn', !!input.value && !p);
     addBtn.disabled = !p;

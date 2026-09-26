@@ -7,6 +7,8 @@ import { detectFps } from '../gif/mp4info';
 import { Cancelled, encodeGif, estimateGifSize, type GifOptions } from '../gif/encoder';
 import { frameTimes, outputSize } from '../gif/timing';
 import { Trimmer, formatTime } from './trimmer';
+import { ASPECTS, Cropper } from './cropper';
+import type { Rect } from '../gif/frames';
 
 const MAX_SEC = 30;
 
@@ -24,6 +26,8 @@ interface Session {
   percent: number;
   fpsChoice: string; // 'auto' または数値
   dither: boolean;
+  crop: Rect | null; // 画面の切り抜き（null は全体）
+  cropEditing: boolean;
   estimate?: { key: string; bytes: number | null };
   job?: { progress: number; cancel: { cancelled: boolean }; promise: Promise<void> };
   result?: { blob: Blob; id: string; opts: GifOptions };
@@ -59,8 +63,9 @@ function targetFps(s: Session): number {
 }
 
 function options(s: Session): GifOptions {
-  const { w, h } = outputSize(s.srcW, s.srcH, s.percent);
-  return { start: s.start, end: s.end, fps: targetFps(s), width: w, height: h, dither: s.dither };
+  const base = s.crop ?? { x: 0, y: 0, w: s.srcW, h: s.srcH };
+  const { w, h } = outputSize(base.w, base.h, s.percent);
+  return { start: s.start, end: s.end, fps: targetFps(s), width: w, height: h, dither: s.dither, crop: s.crop };
 }
 
 async function openSource(blob: Blob, name: string, mediaId?: string): Promise<void> {
@@ -83,6 +88,8 @@ async function openSource(blob: Blob, name: string, mediaId?: string): Promise<v
     percent: s.gifScalePercent,
     fpsChoice: 'auto',
     dither: s.gifDither,
+    crop: null,
+    cropEditing: false,
   };
   grabber = g;
   notify();
@@ -145,7 +152,41 @@ export function gifView(): HTMLElement {
 function editor(s: Session): HTMLElement {
   const box = h('div');
   const url = URL.createObjectURL(s.blob);
-  const video = h('video', { src: url, class: 'preview', playsinline: true, muted: true, preload: 'auto' });
+  const video = h('video', { src: url, class: 'stage-video', playsinline: true, muted: true, preload: 'auto' });
+
+  // 画面の切り抜き：プレビューの上に枠を重ねる
+  const cropLabel = h('span', { class: 'muted small' });
+  const updateCropLabel = () => {
+    const c = s.crop;
+    cropLabel.textContent = c
+      ? `${c.w}×${c.h}（元の ${Math.round(((c.w * c.h) / (s.srcW * s.srcH)) * 100)}%）`
+      : '全体（切り抜きなし）';
+  };
+  const cropper = new Cropper(s.srcW, s.srcH, s.crop, (r) => {
+    const full = r.x === 0 && r.y === 0 && r.w >= s.srcW - 1 && r.h >= s.srcH - 1;
+    s.crop = full ? null : r;
+    s.result = undefined;
+    updateCropLabel();
+    refresh();
+  });
+  const stage = h('div', { class: 'crop-stage' }, video, cropper.overlay);
+  stage.style.aspectRatio = `${s.srcW} / ${s.srcH}`;
+  stage.style.width = `min(100%, calc(50vh * ${s.srcW / s.srcH}))`;
+  const setEditing = (on: boolean) => {
+    s.cropEditing = on;
+    cropper.overlay.classList.toggle('readonly', !on);
+    cropper.overlay.classList.toggle('hidden', !on && !s.crop);
+    editBtn.textContent = on ? '✓ 切り抜きを決定' : '切り抜き範囲を編集';
+    editBtn.classList.toggle('primary', on);
+    aspectRow.classList.toggle('hidden', !on);
+  };
+  const editBtn = h('button', { class: 'btn small', onclick: () => setEditing(!s.cropEditing) });
+  const aspectRow = h(
+    'div',
+    { class: 'chips' },
+    ...ASPECTS.map((a) => h('button', { class: 'btn small', onclick: () => cropper.setAspect(a.value) }, a.label)),
+    h('button', { class: 'btn small danger', onclick: () => cropper.reset() }, 'リセット'),
+  );
   let looping = false;
 
   // 選択範囲だけを繰り返し再生
@@ -363,7 +404,9 @@ function editor(s: Session): HTMLElement {
 
   box.append(
     h('div', { class: 'card' },
-      video,
+      stage,
+      h('div', { class: 'row between' }, h('div', { class: 'col' }, h('span', { class: 'label' }, '画面の切り抜き'), cropLabel), editBtn),
+      aspectRow,
       h('div', { class: 'row between' }, playBtn, h('span', { class: 'muted small' }, `元：${s.srcW}×${s.srcH}${src ? ` ・ ${src}fps` : ''} ・ ${s.duration.toFixed(2)}秒`)),
       trimmer.el,
     ),
@@ -385,6 +428,8 @@ function editor(s: Session): HTMLElement {
     else showProgress();
   };
   progressListeners.add(onProgress);
+  updateCropLabel();
+  setEditing(s.cropEditing);
   refresh();
   showProgress();
   showResult();
@@ -393,7 +438,7 @@ function editor(s: Session): HTMLElement {
 
 function estimateKey(s: Session): string {
   const o = options(s);
-  return JSON.stringify([o.start, o.end, o.fps, o.width, o.height, o.dither]);
+  return JSON.stringify([o.start, o.end, o.fps, o.width, o.height, o.dither, o.crop]);
 }
 
 function row(label: string, value: string): HTMLElement {

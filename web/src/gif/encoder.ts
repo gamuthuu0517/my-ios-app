@@ -1,5 +1,5 @@
 // GIF 変換の全体の流れ（フレーム取り出し → Worker で減色・圧縮）
-import type { FrameGrabber } from './frames';
+import type { FrameGrabber, Rect } from './frames';
 import { frameDelaysCs, frameTimes } from './timing';
 
 export interface GifOptions {
@@ -9,6 +9,7 @@ export interface GifOptions {
   width: number;
   height: number;
   dither: boolean;
+  crop: Rect | null; // 画面の切り抜き範囲（null は全体）
 }
 
 function newWorker(): Worker {
@@ -40,8 +41,8 @@ export async function estimateGifSize(g: FrameGrabber, o: GifOptions, isStale: (
   const span = Math.max(0, o.end - o.start - 1 / o.fps);
   for (let i = 0; i < points; i++) {
     const t = o.start + (span * (i + 0.5)) / points;
-    const a = await g.grab(t, o.width, o.height);
-    const b = await g.grab(Math.min(o.end - 0.001, t + 1 / o.fps), o.width, o.height);
+    const a = await g.grab(t, o.width, o.height, o.crop);
+    const b = await g.grab(Math.min(o.end - 0.001, t + 1 / o.fps), o.width, o.height, o.crop);
     pairs.push([a, b]);
     if (isStale()) return null;
   }
@@ -70,7 +71,7 @@ export async function encodeGif(
     const samples: Uint8ClampedArray[] = [];
     const n = Math.min(8, times.length);
     for (let i = 0; i < n; i++) {
-      samples.push(await g.grab(times[Math.floor(((i + 0.5) * times.length) / n)], o.width, o.height));
+      samples.push(await g.grab(times[Math.floor(((i + 0.5) * times.length) / n)], o.width, o.height, o.crop));
       if (signal.cancelled) throw new Cancelled();
     }
     w.postMessage({ type: 'init', width: o.width, height: o.height, dither: o.dither, samples });
@@ -96,7 +97,7 @@ export async function encodeGif(
     for (let i = 0; i < times.length; i++) {
       if (signal.cancelled) throw new Cancelled();
       if (failure) throw failure;
-      const data = await g.grab(times[i], o.width, o.height);
+      const data = await g.grab(times[i], o.width, o.height, o.crop);
       while (inFlight >= 3 && !failure) await new Promise<void>((r) => (wake = r));
       inFlight++;
       w.postMessage({ type: 'frame', data, delayCs: delays[i] }, [data.buffer]);

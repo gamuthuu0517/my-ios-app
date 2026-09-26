@@ -1,5 +1,12 @@
 // 動画の指定時刻のフレームを取り出す（<video> を1コマずつシークして描画する）
 
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class FrameGrabber {
@@ -68,15 +75,16 @@ export class FrameGrabber {
     if (rvfc) await Promise.race([new Promise<void>((r) => rvfc.call(v, () => r())), sleep(60)]);
   }
 
-  /** 時刻 t のフレームを w×h に縮小した RGBA で返す */
-  async grab(t: number, w: number, h: number): Promise<Uint8ClampedArray> {
+  /** 時刻 t のフレームを w×h に縮小した RGBA で返す。crop を渡すとその範囲（元動画の画素単位）だけを使う */
+  async grab(t: number, w: number, h: number, crop?: Rect | null): Promise<Uint8ClampedArray> {
     await this.seek(t);
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
     }
     this.ctx.imageSmoothingQuality = 'high';
-    this.ctx.drawImage(this.video, 0, 0, w, h);
+    if (crop) this.ctx.drawImage(this.video, crop.x, crop.y, crop.w, crop.h, 0, 0, w, h);
+    else this.ctx.drawImage(this.video, 0, 0, w, h);
     return this.ctx.getImageData(0, 0, w, h).data;
   }
 
