@@ -172,3 +172,20 @@ a.btn { text-align: center; text-decoration: none; }
 .select { appearance: none; -webkit-appearance: none; }
 .progress { width: 100%; height: 8px; accent-color: var(--accent); }
 .media .preview { max-height: 40vh; }
+
+.warn { color: var(--warn); }
+.list-head { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.list-head .btn.hidden + * { margin-top: 0; }
+.collapse-head {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left;
+}
+.collapse-head .item-meta { display: flex; flex-direction: column; gap: 4px; }
+.chevron { flex: none; width: 20px; height: 20px; color: var(--muted); transition: transform 0.2s; transform: rotate(90deg); }
+.chevron svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.collapsed .chevron { transform: rotate(0deg); }
+.collapse-body { display: flex; flex-direction: column; gap: 12px; }
+.collapse-body:empty, .collapsed > .collapse-body { display: none; }
+.sub-item { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.thumb.small { width: 72px; height: 48px; }
+.card .card { margin-bottom: 0; background: var(--bg); }

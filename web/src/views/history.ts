@@ -11,8 +11,11 @@ export function historyView(): HTMLElement {
       if (items.length === 0) return list.replaceChildren(empty());
       list.replaceChildren(
         ...items.map((r) =>
-          mediaCard(r, () => {
-            if (!list.querySelector('.media')) list.replaceChildren(empty());
+          mediaCard(r, {
+            collapsed: true,
+            onDeleted: () => {
+              if (!list.querySelector('.media')) list.replaceChildren(empty());
+            },
           }),
         ),
       );

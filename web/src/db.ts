@@ -12,6 +12,7 @@ export interface MediaRecord {
   height?: number;
   duration?: number;
   savedToPhotos?: boolean;
+  thumb?: Blob;
   createdAt: number;
 }
 
