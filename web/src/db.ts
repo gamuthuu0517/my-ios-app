@@ -43,6 +43,7 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
 export const putMedia = (r: MediaRecord) => tx('readwrite', (s) => s.put(r));
 export const getMedia = (id: string) => tx<MediaRecord | undefined>('readonly', (s) => s.get(id));
 export const deleteMedia = (id: string) => tx('readwrite', (s) => s.delete(id));
+export const clearMedia = () => tx('readwrite', (s) => s.clear());
 
 export async function listMedia(): Promise<MediaRecord[]> {
   const all = await tx<MediaRecord[]>('readonly', (s) => s.getAll());

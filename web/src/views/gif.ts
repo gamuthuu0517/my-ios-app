@@ -28,6 +28,7 @@ interface Session {
   dither: boolean;
   crop: Rect | null; // 画面の切り抜き（null は全体）
   cropEditing: boolean;
+  editing: boolean; // false のときは変換結果だけを表示
   estimate?: { key: string; bytes: number | null };
   job?: { progress: number; cancel: { cancelled: boolean }; promise: Promise<void> };
   result?: { blob: Blob; id: string; opts: GifOptions };
@@ -90,6 +91,7 @@ async function openSource(blob: Blob, name: string, mediaId?: string): Promise<v
     dither: s.gifDither,
     crop: null,
     cropEditing: false,
+    editing: true,
   };
   grabber = g;
   notify();
@@ -125,10 +127,15 @@ export function gifView(): HTMLElement {
           h('button', { class: 'btn primary', onclick: () => fileInput.click() }, session ? '別の動画を選ぶ' : '写真から動画を選ぶ'),
           h('a', { class: 'btn', href: '#history' }, 'アプリ内の動画'),
         ),
-        session ? h('div', { class: 'muted small clamp' }, session.name) : h('p', { class: 'muted small' }, '写真アプリの動画、またはダウンロードした動画（履歴の「GIFにする」）を GIF に変換します。'),
+        session
+          ? h('div', { class: 'row between' },
+              h('div', { class: 'muted small clamp' }, session.name),
+              h('button', { class: 'btn small', onclick: () => closeSession() }, '閉じる'),
+            )
+          : h('p', { class: 'muted small' }, '写真アプリの動画、またはダウンロードした動画（履歴の「GIFにする」）を GIF に変換します。'),
         fileInput,
       ),
-      session ? editor(session) : '',
+      session ? (session.result && !session.editing ? resultView(session) : editor(session)) : '',
     );
   };
   listeners.add(render);
@@ -337,11 +344,15 @@ function editor(s: Session): HTMLElement {
             createdAt: Date.now(),
           });
           s.result = { blob, id, opts: o };
+          s.editing = false; // 完了したら設定を閉じて結果だけにする
+          s.cropEditing = false;
         } catch (e) {
           if (!(e instanceof Cancelled)) s.error = `変換に失敗しました：${(e as Error).message}`;
         } finally {
           s.job = undefined;
           notify();
+          // 結果だけの表示に切り替わるので先頭まで戻す
+          if (s.result && !s.editing) document.querySelector('.content')?.scrollTo({ top: 0, behavior: 'smooth' });
         }
       })(),
     };
@@ -370,36 +381,7 @@ function editor(s: Session): HTMLElement {
 
   const showResult = () => {
     if (s.error) return resultBox.replaceChildren(h('div', { class: 'card error' }, s.error));
-    if (!s.result) return resultBox.replaceChildren();
-    const r = s.result;
-    const gifUrl = URL.createObjectURL(r.blob);
-    const delBtn = s.mediaId
-      ? h('button', { class: 'btn danger' }, '元動画を削除')
-      : null;
-    delBtn?.addEventListener('click', async () => {
-      const rec = await getMedia(s.mediaId!);
-      const msg = rec?.savedToPhotos
-        ? 'アプリ内の元動画を削除します（写真アプリに保存した分は残ります）'
-        : '元動画はまだ写真に保存していません。削除すると元に戻せません。削除しますか？';
-      if (!confirm(msg)) return;
-      await deleteMedia(s.mediaId!);
-      s.mediaId = undefined;
-      toast('元動画を削除しました');
-      showResult();
-    });
-    resultBox.replaceChildren(
-      h('div', { class: 'card' },
-        h('div', { class: 'ok' }, '✓ 変換できました'),
-        h('img', { src: gifUrl, class: 'preview gif', alt: 'GIF' }),
-        h('p', { class: 'muted small' }, '画像を長押し →「写真に追加」で保存できます'),
-        summaryRows(r.blob.size, r.opts),
-        h('div', { class: 'actions' },
-          h('button', { class: 'btn primary', onclick: () => shareFile(r.blob, `${s.name.replace(/\.[^.]+$/, '')}.gif`) }, '保存・共有'),
-          delBtn,
-        ),
-        h('p', { class: 'muted small' }, 'GIF は履歴にも保存されています'),
-      ),
-    );
+    resultBox.replaceChildren();
   };
 
   box.append(
@@ -418,6 +400,16 @@ function editor(s: Session): HTMLElement {
     ),
     h('div', { class: 'card' }, summary, warn),
     s.job ? '' : convertBtn,
+    s.result && !s.job
+      ? h('button', {
+          class: 'btn block',
+          onclick: () => {
+            if (!s.result) return toast('設定を変えたため、前回の結果は新しく変換し直してください');
+            s.editing = false;
+            notify();
+          },
+        }, '前回の結果に戻る')
+      : '',
     progressBox,
     resultBox,
   );
@@ -477,4 +469,57 @@ async function makeStrip(blob: Blob, duration: number, w: number, hgt: number): 
     g.close();
   }
   return out;
+}
+
+/** 変換結果のカード（保存・元動画の削除・作り直し・閉じる） */
+function resultView(s: Session): HTMLElement {
+  const r = s.result!;
+  const gifUrl = URL.createObjectURL(r.blob);
+  const box = h('div');
+  const delBtn = s.mediaId ? h('button', { class: 'btn danger' }, '元動画を削除') : null;
+  delBtn?.addEventListener('click', async () => {
+    const rec = await getMedia(s.mediaId!);
+    const msg = rec?.savedToPhotos
+      ? 'アプリ内の元動画を削除します（写真アプリに保存した分は残ります）'
+      : '元動画はまだ写真に保存していません。削除すると元に戻せません。削除しますか？';
+    if (!confirm(msg)) return;
+    await deleteMedia(s.mediaId!);
+    s.mediaId = undefined;
+    toast('元動画を削除しました');
+    delBtn.remove();
+  });
+  box.append(
+    h('div', { class: 'card' },
+      h('div', { class: 'ok' }, '✓ 変換できました'),
+      h('img', { src: gifUrl, class: 'preview gif', alt: 'GIF' }),
+      h('p', { class: 'muted small' }, '画像を長押し →「写真に追加」で保存できます'),
+      summaryRows(r.blob.size, r.opts),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn primary', onclick: () => shareFile(r.blob, `${s.name.replace(/\.[^.]+$/, '')}.gif`) }, '保存・共有'),
+        delBtn,
+      ),
+      h('p', { class: 'muted small' }, 'GIF は履歴にも保存されています'),
+      h('div', { class: 'actions' },
+        h('button', {
+          class: 'btn',
+          onclick: () => {
+            s.editing = true;
+            notify();
+          },
+        }, '設定を変えて作り直す'),
+        h('button', { class: 'btn', onclick: () => closeSession() }, '閉じる'),
+      ),
+    ),
+  );
+  return box;
+}
+
+/** 選んだ動画・設定・結果をすべて片付けて、変換タブを最初の状態に戻す */
+function closeSession(): void {
+  if (session?.job) return toast('変換中は閉じられません');
+  grabber?.close();
+  grabber = null;
+  session = null;
+  if (location.hash.includes('?')) history.replaceState(null, '', '#gif');
+  notify();
 }
