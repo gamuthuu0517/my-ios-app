@@ -39,6 +39,17 @@ ALLOWED_HOSTS = re.compile(
 )
 
 app = FastAPI(title="ClipKit server")
+
+
+@app.exception_handler(Exception)
+async def storage_unavailable(_request, exc: Exception):
+    """Cloud Storage の一時的な障害は 503 で返す（アプリは 503 なら待って再確認する）"""
+    from fastapi.responses import JSONResponse
+    from google.api_core.exceptions import GoogleAPICallError, RetryError
+
+    if isinstance(exc, (GoogleAPICallError, RetryError, TimeoutError, ConnectionError)):
+        return JSONResponse({"detail": "一時保管場所に一時的に接続できません。しばらくして再確認します"}, status_code=503)
+    raise exc
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

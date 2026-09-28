@@ -46,10 +46,13 @@ def put_json(name: str, data: dict) -> None:
 
 
 def get_json(name: str) -> dict | None:
-    blob = bucket().blob(name)
+    """見つからないときだけ None。一時的な障害（5xx・タイムアウト）は例外のまま上げ、
+    API 側で 503（再試行してよい）として返す。期限切れと取り違えてアプリがジョブを手放さないようにするため"""
+    from google.api_core.exceptions import NotFound
+
     try:
-        return json.loads(blob.download_as_bytes())
-    except Exception:  # noqa: BLE001 見つからない場合など
+        return json.loads(bucket().blob(name).download_as_bytes())
+    except NotFound:
         return None
 
 
