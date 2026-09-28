@@ -1,6 +1,7 @@
 import { h, toast, formatBytes } from '../dom';
 import { deleteMedia, updateMedia, type MediaRecord } from '../db';
 import { shareFile } from '../share';
+import { makeVideoThumb } from '../thumb';
 
 const CHEVRON = '<svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>';
 
@@ -20,7 +21,21 @@ function formatDuration(sec?: number): string {
 export function mediaCard(r: MediaRecord, opts: { collapsed?: boolean; onDeleted?: () => void } = {}): HTMLElement {
   let url: string | null = null;
   const thumbSrc = r.kind === 'gif' ? r.blob : r.thumb;
-  const thumbUrl = thumbSrc ? URL.createObjectURL(thumbSrc) : null;
+  let thumbUrl = thumbSrc ? URL.createObjectURL(thumbSrc) : null;
+  const thumbEl = thumbUrl ? h('img', { src: thumbUrl, class: 'thumb', alt: '' }) : h('div', { class: 'thumb loading' });
+  // サムネイルがまだ無い動画（以前のバージョンで保存したものなど）は、ここで作って保存する
+  if (!thumbSrc && r.kind === 'video') {
+    void makeVideoThumb(r.blob).then(async (b) => {
+      if (!b) return thumbEl.classList.remove('loading');
+      r.thumb = b;
+      await updateMedia(r.id, { thumb: b });
+      thumbUrl = URL.createObjectURL(b);
+      const img = h('img', { src: thumbUrl, class: 'thumb', alt: '' });
+      thumbEl.replaceWith(img);
+      if (video) video.poster = thumbUrl;
+    });
+  }
+  let video: HTMLVideoElement | null = null;
 
   const status = h('span', { class: 'muted small' }, r.savedToPhotos ? '写真に保存済み' : 'アプリ内のみ');
   const meta = [
@@ -35,7 +50,7 @@ export function mediaCard(r: MediaRecord, opts: { collapsed?: boolean; onDeleted
   const head = h(
     'button',
     { class: 'collapse-head', type: 'button' },
-    thumbUrl ? h('img', { src: thumbUrl, class: 'thumb', alt: '' }) : h('div', { class: 'thumb' }),
+    thumbEl,
     h(
       'div',
       { class: 'item-meta' },
@@ -53,7 +68,15 @@ export function mediaCard(r: MediaRecord, opts: { collapsed?: boolean; onDeleted
     const preview =
       r.kind === 'gif'
         ? h('img', { src: url, class: 'preview', alt: r.title })
-        : h('video', { src: url, class: 'preview', controls: true, playsinline: true, preload: 'metadata' });
+        : (video = h('video', {
+            // #t=0.001 で iOS でも最初のコマを表示させる
+            src: `${url}#t=0.001`,
+            poster: thumbUrl ?? undefined,
+            class: 'preview',
+            controls: true,
+            playsinline: true,
+            preload: 'metadata',
+          }));
 
     const saveBtn = h('button', { class: 'btn primary' }, '写真に保存');
     saveBtn.addEventListener('click', async () => {
