@@ -248,3 +248,8 @@ h2.flush { margin: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .media.flash { animation: flash 1.2s ease-out; }
 @keyframes flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 0 transparent; } }
+
+/* 履歴のタブ（ダウンロード / GIF） */
+.seg { display: flex; padding: 3px; margin-bottom: 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+.seg-btn { flex: 1; padding: 9px 8px; border: 0; border-radius: 9px; background: none; color: var(--muted); font: inherit; font-size: 15px; font-weight: 600; }
+.seg-btn.active { background: var(--accent); color: var(--accent-text); }

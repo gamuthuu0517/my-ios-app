@@ -84,7 +84,9 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
             job["stage"] = "done"
             save(True)
             if notify:
-                job["push"] = push.send(notify, done_text, name)[1]
+                # 通知をタップしたら履歴の該当タブ（ダウンロード / GIF）を開く
+                tab = "gif" if job["type"] == "gif" else "video"
+                job["push"] = push.send(notify, done_text, name, f"./#history?tab={tab}")[1]
                 save(True)
         except Exception as e:  # noqa: BLE001
             log.exception("job failed")
@@ -94,7 +96,8 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
             job["error"] = friendly_detail(e)
             save(True)
             if notify:
-                job["push"] = push.send(notify, "処理に失敗しました", f"{job['title']}：{job['error'][:80]}")[1]
+                page = "#gif" if job["type"] == "gif" else "#download"
+                job["push"] = push.send(notify, "処理に失敗しました", f"{job['title']}：{job['error'][:80]}", f"./{page}")[1]
                 save(True)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
