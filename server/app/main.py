@@ -491,3 +491,13 @@ def upload_start(req: UploadRequest, origin: str | None = Header(default=None)) 
 @app.get("/api/push/key", dependencies=[Depends(require_passphrase), Depends(require_storage)])
 def push_key() -> dict:
     return {"key": push.public_key()}
+
+
+class PushTestRequest(BaseModel):
+    subscription: dict
+
+
+@app.post("/api/push/test", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def push_test(req: PushTestRequest) -> dict:
+    ok, detail = push.send(req.subscription, "ClipKit テスト通知", "通知は正しく届いています", "./#settings")
+    return {"ok": ok, "detail": detail}

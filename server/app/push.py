@@ -11,8 +11,8 @@ from functools import lru_cache
 from . import storage
 
 KEY_OBJECT = "config/vapid_private.pem"
-# 通知サービスに伝える連絡先（アプリの URL）
-SUBJECT = os.environ.get("VAPID_SUBJECT", "https://gamuthuu0517.github.io/my-ios-app/")
+# 通知サービスに伝える送信者の連絡先。送信に使う部品（pywebpush）は mailto: 形式しか受け付けない
+SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:clipkit@example.com")
 log = logging.getLogger("push")
 
 
@@ -36,13 +36,14 @@ def public_key() -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def send(subscription: dict | None, title: str, body: str, url: str = "./#history") -> None:
+def send(subscription: dict | None, title: str, body: str, url: str = "./#history") -> tuple[bool, str]:
+    """通知を送る。(成功したか, 結果の説明) を返す"""
     if not subscription:
-        return
+        return False, "通知先が登録されていません"
     try:
-        from pywebpush import webpush
+        from pywebpush import WebPushException, webpush
 
-        webpush(
+        res = webpush(
             subscription_info=subscription,
             data=json.dumps({"title": title, "body": body, "url": url}, ensure_ascii=False),
             vapid_private_key=vapid(),
@@ -50,5 +51,14 @@ def send(subscription: dict | None, title: str, body: str, url: str = "./#histor
             ttl=86400,
             timeout=10,
         )
+        return True, f"送信しました（{getattr(res, 'status_code', '')}）"
+    except WebPushException as e:
+        status = getattr(e.response, "status_code", None)
+        text = (getattr(e.response, "text", "") or "")[:200]
+        log.warning("push failed: %s %s", status, text)
+        if status in (404, 410):
+            return False, "通知の登録が無効になっています。設定画面で「通知を許可する」をもう一度押してください"
+        return False, f"通知サービスに拒否されました（{status}：{text or e}）"
     except Exception as e:  # noqa: BLE001 通知の失敗で処理全体を失敗にしない
         log.warning("push failed: %s", e)
+        return False, f"通知を送れませんでした（{e}）"

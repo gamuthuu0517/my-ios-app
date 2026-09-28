@@ -2,7 +2,7 @@ import { h, toast, isStandalone, formatBytes } from '../dom';
 import { loadSettings, saveSettings, type Settings } from '../settings';
 import { enableDebugConsole } from '../debug';
 import { acceptedCodecs } from '../codecs';
-import { enableNotifications, permission } from '../notify';
+import { enableNotifications, permission, sendTestNotification } from '../notify';
 
 function field(label: string, control: HTMLElement, note?: string): HTMLElement {
   return h('label', { class: 'field' }, h('span', { class: 'label' }, label), control, note ? h('span', { class: 'muted small' }, note) : null);
@@ -23,9 +23,26 @@ export function settingsView(): HTMLElement {
   // 通知の許可状態と、許可するボタン
   const notifyState = h('div', { class: 'muted small' });
   const allowBtn = h('button', { class: 'btn small' }, '通知を許可する');
+  const testBtn = h('button', { class: 'btn small' }, 'テスト通知を送る');
+  const testResult = h('div', { class: 'muted small' });
+  testBtn.addEventListener('click', async () => {
+    testBtn.disabled = true;
+    testResult.textContent = '送信中…（アプリを閉じると通知が見やすくなります）';
+    try {
+      const r = await sendTestNotification();
+      testResult.textContent = r.ok ? `✓ ${r.detail}。数秒で通知が届きます` : `✗ ${r.detail}`;
+      testResult.classList.toggle('warn', !r.ok);
+    } catch (e) {
+      testResult.textContent = `✗ ${(e as Error).message}`;
+      testResult.classList.add('warn');
+    }
+    testBtn.disabled = false;
+  });
   const refreshNotify = () => {
     const p = permission();
-    allowBtn.classList.toggle('hidden', p === 'granted' || p === 'denied' || p === 'unsupported');
+    allowBtn.classList.toggle('hidden', p === 'denied' || p === 'unsupported');
+    allowBtn.textContent = p === 'granted' ? '通知を登録し直す' : '通知を許可する';
+    testBtn.classList.toggle('hidden', p !== 'granted');
     notifyState.textContent =
       p === 'granted'
         ? '通知：許可済み'
@@ -97,6 +114,7 @@ export function settingsView(): HTMLElement {
       h('label', { class: 'switch' }, notifyDl, h('span', {}, 'ダウンロード完了を通知')),
       h('label', { class: 'switch' }, notifyGif, h('span', {}, 'GIF変換完了を通知（ダウンロードした動画のみ）')),
       h('div', { class: 'row between' }, notifyState, allowBtn),
+      h('div', { class: 'row between' }, testResult, testBtn),
       h('p', { class: 'muted small' }, 'サーバーで処理するので、アプリを閉じても処理は続き、完了すると通知が届きます。写真アプリの動画の GIF 変換は iPhone 内で行うため、アプリを開いたままにしてください。'),
     ),
     h(

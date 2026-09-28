@@ -83,7 +83,9 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
             job["state"] = "done"
             job["stage"] = "done"
             save(True)
-            push.send(notify, done_text, name)
+            if notify:
+                job["push"] = push.send(notify, done_text, name)[1]
+                save(True)
         except Exception as e:  # noqa: BLE001
             log.exception("job failed")
             from .main import friendly_detail
@@ -91,7 +93,9 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
             job["state"] = "error"
             job["error"] = friendly_detail(e)
             save(True)
-            push.send(notify, "処理に失敗しました", f"{job['title']}：{job['error'][:80]}")
+            if notify:
+                job["push"] = push.send(notify, "処理に失敗しました", f"{job['title']}：{job['error'][:80]}")[1]
+                save(True)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
             _local.pop(job["id"], None)

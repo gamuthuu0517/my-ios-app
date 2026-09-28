@@ -69,8 +69,8 @@ export function mediaCard(r: MediaRecord, opts: { collapsed?: boolean; onDeleted
       r.kind === 'gif'
         ? h('img', { src: url, class: 'preview', alt: r.title })
         : (video = h('video', {
-            // #t=0.001 で iOS でも最初のコマを表示させる
-            src: `${url}#t=0.001`,
+            // 最初のコマはサムネイルを poster にして見せる（blob の URL に #t= を付けると iOS で再生できなくなる）
+            src: url,
             poster: thumbUrl ?? undefined,
             class: 'preview',
             controls: true,

@@ -196,6 +196,10 @@ export async function sourceExists(source: GifSource): Promise<boolean> {
   return (await post('/api/sources/check', source)).json().then((r) => !!r.exists);
 }
 
+export async function pushTest(subscription: PushSubscriptionJSON): Promise<{ ok: boolean; detail: string }> {
+  return (await post('/api/push/test', { subscription })).json();
+}
+
 export async function pushKey(): Promise<string> {
   return (await request('GET', '/api/push/key')).json().then((r) => r.key);
 }
