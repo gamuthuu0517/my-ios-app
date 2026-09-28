@@ -68,22 +68,26 @@ def start(kind: str, title: str, runner: Runner, notify: dict | None, done_text:
 
 def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None:
     last_save = 0.0
+    # 状態の保存は1件ずつ行う。生存確認が古い「処理中」を、後から完了の上に書き戻さないようにするため
+    lock = threading.Lock()
+    stop = threading.Event()  # 完了・失敗の状態を書く前に立てる。以後の生存確認は書かない
 
-    def save(force: bool = False) -> None:
+    def save(force: bool = False, heartbeat: bool = False) -> None:
         nonlocal last_save
-        now = time.time()
-        if force or now - last_save > 3:
-            last_save = now
-            job["updatedAt"] = int(now * 1000)
-            storage.put_json(status_name(job["id"]), job)
+        with lock:
+            if heartbeat and stop.is_set():
+                return
+            now = time.time()
+            if force or now - last_save > 3:
+                last_save = now
+                job["updatedAt"] = int(now * 1000)
+                storage.put_json(status_name(job["id"]), job)
 
     # 進捗が出ない工程（解析・色の分析など）でも生存確認を更新し続ける
-    stop = threading.Event()
-
     def heartbeat() -> None:
         while not stop.wait(20):
             try:
-                save(True)
+                save(True, heartbeat=True)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -109,6 +113,7 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
             obj = f"jobs/{job['id']}/{'out.gif' if ctype == 'image/gif' else 'out.mp4'}"
             storage.upload_file(obj, path, ctype)
             job["result"] = {"object": obj, "name": name, "size": path.stat().st_size, "contentType": ctype}
+            stop.set()
             job["state"] = "done"
             job["stage"] = "done"
             save(True)
@@ -121,6 +126,7 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
             log.exception("job failed")
             from .main import friendly_detail
 
+            stop.set()
             job["state"] = "error"
             job["error"] = friendly_detail(e)
             save(True)

@@ -65,7 +65,13 @@ function load(): Job[] {
         }
       }
     }
-    return list;
+    // 隠したまま中断したもの（画面を開いている間だけの方式で処理中だった等）は、再開できないので片付ける
+    return list.filter((j) => {
+      if (!j.hidden || busy(j)) return true;
+      const failed = j.tasks.filter((t) => t.status === 'error').length;
+      if (failed) setTimeout(() => toast(`リストから消したダウンロード ${failed}件が中断されました`), 0);
+      return false;
+    });
   } catch {
     return [];
   }
@@ -101,7 +107,22 @@ export function getJobs(): Job[] {
   return jobs.filter((j) => !j.hidden);
 }
 
-const busy = (j: Job) => j.tasks.some((t) => t.status === 'running' || t.status === 'queued');
+function busy(j: Job): boolean {
+  return j.tasks.some((t) => t.status === 'running' || t.status === 'queued');
+}
+
+/** 隠したジョブがすべて終わったら片付ける。失敗が1件でもあれば件数をまとめて知らせる（履歴には入らないため） */
+function finishHidden(job: Job): boolean {
+  if (!job.hidden || busy(job)) return false;
+  const failed = job.tasks.filter((t) => t.status === 'error');
+  if (failed.length) {
+    const title = job.info?.items[failed[0].itemIdx]?.title ?? job.url;
+    const more = failed.length > 1 ? ` ほか${failed.length - 1}件` : '';
+    setTimeout(() => toast(`リストから消したダウンロードが失敗しました：${title.slice(0, 24)}${more}`), 0);
+  }
+  jobs = jobs.filter((j) => j !== job);
+  return true;
+}
 
 /** 画質の初期値：変換不要（端末が扱える形式）で取れる最高画質。なければ最高画質 */
 export function defaultQuality(item: Item): string {
@@ -284,10 +305,7 @@ async function runTask(job: Job, task: Task): Promise<void> {
     task.serverJob = undefined;
   }
   // 隠したジョブは、すべて終わったら片付ける（失敗したものは履歴に入らないので通知で知らせる）
-  if (job.hidden && !busy(job)) {
-    if (task.status === 'error') toast(`ダウンロードに失敗しました：${item.title.slice(0, 30)}`);
-    jobs = jobs.filter((j) => j !== job);
-  }
+  finishHidden(job);
   emit(job);
   pump();
 }
@@ -338,6 +356,8 @@ export function stageText(t: Task): string {
   }
 }
 
+// 起動時の片付け（中断・隠したジョブの整理）の結果をすぐ保存する
+save();
 // 解析中に閉じられたものは、次回起動時に解析し直す
 for (const j of jobs) if (j.status === 'analyzing') void analyze(j);
 // サーバー側で処理中だったものは続きから確認し、順番待ちのものは再開する
