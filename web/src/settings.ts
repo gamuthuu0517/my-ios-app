@@ -22,10 +22,23 @@ export const defaultSettings: Settings = {
   notifyGif: true,
 };
 
+const DEBUG_RESET_KEY = 'clipkit.debugReset.v1';
+
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...defaultSettings, ...JSON.parse(raw) };
+    if (raw) {
+      const s: Settings = { ...defaultSettings, ...JSON.parse(raw) };
+      // v0.9.3：調査用に付けたままだったデバッグ表示を一度だけオフに戻す
+      if (!localStorage.getItem(DEBUG_RESET_KEY)) {
+        localStorage.setItem(DEBUG_RESET_KEY, '1');
+        if (s.debugConsole) {
+          s.debugConsole = false;
+          localStorage.setItem(KEY, JSON.stringify(s));
+        }
+      }
+      return s;
+    }
   } catch {
     // ストレージが使えない環境では既定値で動かす
   }

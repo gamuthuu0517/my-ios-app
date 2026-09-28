@@ -25,20 +25,22 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 /* ダブルタップでの拡大を無効にする（タップの反応も速くなる） */
 html, body, button, a, input, select, label, .card { touch-action: manipulation; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+/* ホーム画面アプリではステータスバーを透過にしているため、iOS は「100%」の高さをステータスバー分だけ短く計算する。
+   画面全体の高さになる 100vh を使い、下のメニューを画面の一番下にぴったり置く */
+html, body { margin: 0; height: 100vh; overflow: hidden; background: var(--bg); color: var(--text); }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
   font-size: 16px;
   line-height: 1.5;
   overscroll-behavior: none;
 }
-#app { display: flex; flex-direction: column; height: 100%; }
+#app { display: flex; flex-direction: column; height: 100vh; }
 
 .content {
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: calc(env(safe-area-inset-top) + 8px) 16px calc(var(--tab-h) + env(safe-area-inset-bottom) + 16px);
+  padding: calc(env(safe-area-inset-top) + 8px) 16px 24px;
 }
 .view h1 { font-size: 28px; margin: 12px 0 16px; }
 .view h2 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
@@ -96,8 +98,7 @@ body {
 .about { gap: 4px; }
 
 .tabbar {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
+  flex: none;
   display: flex;
   height: calc(var(--tab-h) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);

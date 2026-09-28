@@ -1,6 +1,6 @@
 import { h, toast, isStandalone, formatBytes } from '../dom';
 import { loadSettings, saveSettings, type Settings } from '../settings';
-import { enableDebugConsole } from '../debug';
+import { disableDebugConsole, enableDebugConsole } from '../debug';
 import { acceptedCodecs } from '../codecs';
 import { enableNotifications, permission, sendTestNotification } from '../notify';
 
@@ -77,6 +77,7 @@ export function settingsView(): HTMLElement {
     };
     saveSettings(next);
     if (next.debugConsole) enableDebugConsole();
+    else disableDebugConsole();
     toast('保存しました');
   };
 
