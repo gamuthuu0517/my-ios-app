@@ -40,6 +40,7 @@ export interface Job {
   quality: Record<number, string>; // itemIdx → 画質（空文字は最高画質）
   tasks: Task[];
   collapsed: boolean;
+  hidden?: boolean; // リストから消したが、処理中のため裏で完了まで続けている
   createdAt: number;
 }
 
@@ -70,16 +71,13 @@ function load(): Job[] {
   }
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | undefined;
+// アプリはいつ閉じられるか分からないので、変化のたびにすぐ保存する（内容は小さい）
 function save(): void {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(jobs));
-    } catch {
-      // 保存できなくても動作は継続
-    }
-  }, 300);
+  try {
+    localStorage.setItem(KEY, JSON.stringify(jobs));
+  } catch {
+    // 保存できなくても動作は継続
+  }
 }
 
 function emit(job?: Job): void {
@@ -98,9 +96,12 @@ export function activeDownloads(): number {
   return jobs.reduce((n, j) => n + j.tasks.filter((t) => t.status === 'running' || t.status === 'queued').length, 0);
 }
 
+/** 画面に表示するジョブ（リストから消したものは除く） */
 export function getJobs(): Job[] {
-  return jobs;
+  return jobs.filter((j) => !j.hidden);
 }
+
+const busy = (j: Job) => j.tasks.some((t) => t.status === 'running' || t.status === 'queued');
 
 /** 画質の初期値：変換不要（端末が扱える形式）で取れる最高画質。なければ最高画質 */
 export function defaultQuality(item: Item): string {
@@ -153,12 +154,15 @@ export function update(job: Job, patch: Partial<Job>): void {
 }
 
 export function removeJob(job: Job): void {
-  jobs = jobs.filter((j) => j !== job);
+  // 処理中のものは表示から隠すだけにして、サーバーのジョブ ID を保持したまま完了まで続ける
+  // （アプリを閉じて開き直しても再開でき、完了すると履歴に入る）
+  if (busy(job)) job.hidden = true;
+  else jobs = jobs.filter((j) => j !== job);
   emit();
 }
 
 export function clearFinished(): void {
-  jobs = jobs.filter((j) => !(j.status === 'ready' && j.tasks.length > 0 && j.tasks.every((t) => t.status === 'done')));
+  jobs = jobs.filter((j) => j.hidden || !(j.status === 'ready' && j.tasks.length > 0 && j.tasks.every((t) => t.status === 'done')));
   emit();
 }
 
@@ -278,6 +282,11 @@ async function runTask(job: Job, task: Task): Promise<void> {
     task.status = 'error';
     task.error = e instanceof ApiError ? e.message : `エラーが発生しました：${(e as Error).message}`;
     task.serverJob = undefined;
+  }
+  // 隠したジョブは、すべて終わったら片付ける（失敗したものは履歴に入らないので通知で知らせる）
+  if (job.hidden && !busy(job)) {
+    if (task.status === 'error') toast(`ダウンロードに失敗しました：${item.title.slice(0, 30)}`);
+    jobs = jobs.filter((j) => j !== job);
   }
   emit(job);
   pump();

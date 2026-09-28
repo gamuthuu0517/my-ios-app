@@ -14,11 +14,31 @@ def enabled() -> bool:
     return bool(BUCKET)
 
 
+# 一時ファイルの置き場所。ここだけを1日で自動削除する（config/ の通知用の鍵は消さない）
+TEMP_PREFIXES = ["jobs/", "uploads/"]
+
+
 @lru_cache
 def bucket():
     from google.cloud import storage  # 起動を軽くするため必要になってから読み込む
 
-    return storage.Client().bucket(BUCKET)
+    b = storage.Client().bucket(BUCKET)
+    ensure_lifecycle(b)
+    return b
+
+
+def ensure_lifecycle(b) -> None:
+    """一時ファイルを1日で消すルールをバケットに設定する（手動設定の有無・内容に関係なくこの形にそろえる）"""
+    import logging
+
+    want = [{"action": {"type": "Delete"}, "condition": {"age": 1, "matchesPrefix": TEMP_PREFIXES}}]
+    try:
+        b.reload()
+        if list(b.lifecycle_rules) != want:
+            b.lifecycle_rules = want
+            b.patch()
+    except Exception as e:  # noqa: BLE001 権限がなくても動作は続ける（手動設定に任せる）
+        logging.getLogger("storage").warning("could not set lifecycle: %s", e)
 
 
 def put_json(name: str, data: dict) -> None:

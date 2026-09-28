@@ -1,7 +1,9 @@
 """サーバー側で最後まで処理するジョブ（アプリを閉じても続く）。
 
 状態は Cloud Storage の jobs/<id>/status.json に置くので、どのインスタンスからでも問い合わせられる。
-Cloud Run は「インスタンスベースの課金」（CPU を常に割り当て）にしておく必要がある。
+処理は応答後のスレッドで続けるため、Cloud Run は「インスタンスベースの課金」（CPU を常に割り当て）が必須。
+それでもインスタンスが止められた場合に備え、20秒ごとに生存確認を書き、途絶えたジョブは get() で中断扱いにする。
+（より確実にするなら Cloud Tasks / Cloud Run Jobs へ移す。README の「今後の課題」参照）
 """
 
 from __future__ import annotations
@@ -30,8 +32,21 @@ def status_name(job_id: str) -> str:
     return f"jobs/{job_id}/status.json"
 
 
+STALE_SEC = 120  # この時間、生存確認が更新されなければ中断とみなす
+
+
 def get(job_id: str) -> dict | None:
-    return _local.get(job_id) or storage.get_json(status_name(job_id))
+    if job_id in _local:
+        return _local[job_id]
+    st = storage.get_json(status_name(job_id))
+    # 処理していたインスタンスが止められた場合、状態が「処理中」のまま残る。
+    # 生存確認（updatedAt）が途絶えていたら中断として返し、アプリから再試行できるようにする
+    if st and st.get("state") in ("queued", "running"):
+        if time.time() * 1000 - st.get("updatedAt", st.get("createdAt", 0)) > STALE_SEC * 1000:
+            st["state"] = "error"
+            st["error"] = "サーバーの処理が中断されました。再試行してください"
+            storage.put_json(status_name(job_id), st)
+    return st
 
 
 def start(kind: str, title: str, runner: Runner, notify: dict | None, done_text: str) -> dict:
@@ -43,6 +58,7 @@ def start(kind: str, title: str, runner: Runner, notify: dict | None, done_text:
         "stage": "queued",
         "pct": None,
         "createdAt": int(time.time() * 1000),
+        "updatedAt": int(time.time() * 1000),
     }
     _local[job["id"]] = job
     storage.put_json(status_name(job["id"]), job)
@@ -58,7 +74,20 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
         now = time.time()
         if force or now - last_save > 3:
             last_save = now
+            job["updatedAt"] = int(now * 1000)
             storage.put_json(status_name(job["id"]), job)
+
+    # 進捗が出ない工程（解析・色の分析など）でも生存確認を更新し続ける
+    stop = threading.Event()
+
+    def heartbeat() -> None:
+        while not stop.wait(20):
+            try:
+                save(True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    threading.Thread(target=heartbeat, daemon=True).start()
 
     def emit(ev: dict) -> None:
         if ev.get("type") != "progress":
@@ -100,5 +129,6 @@ def _run(job: dict, runner: Runner, notify: dict | None, done_text: str) -> None
                 job["push"] = push.send(notify, "処理に失敗しました", f"{job['title']}：{job['error'][:80]}", f"./{page}")[1]
                 save(True)
         finally:
+            stop.set()
             shutil.rmtree(workdir, ignore_errors=True)
             _local.pop(job["id"], None)
