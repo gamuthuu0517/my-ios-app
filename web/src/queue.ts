@@ -1,3 +1,4 @@
+import { sleep, whenVisible, emitActivity } from './lifecycle';
 // ダウンロードの順番待ち（キュー）。画面を切り替えても状態が残るよう、画面とは別に持つ。
 import {
   extract,
@@ -83,12 +84,18 @@ function save(): void {
 
 function emit(job?: Job): void {
   save();
+  emitActivity();
   for (const l of listeners) l(job);
 }
 
 export function subscribe(fn: (job?: Job) => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+/** 処理中・順番待ちのダウンロード件数 */
+export function activeDownloads(): number {
+  return jobs.reduce((n, j) => n + j.tasks.filter((t) => t.status === 'running' || t.status === 'queued').length, 0);
 }
 
 export function getJobs(): Job[] {
@@ -194,13 +201,7 @@ function pump(): void {
   }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** アプリが表示されるまで待つ（裏にある間は iOS に止められるので問い合わせない） */
-function whenVisible(): Promise<void> {
-  if (!document.hidden) return Promise.resolve();
-  return new Promise((r) => document.addEventListener('visibilitychange', () => !document.hidden && r(), { once: true }));
-}
 
 /** サーバーにダウンロードを任せ、終わったら受け取る。サーバーに一時保管場所が無ければ従来の方式 */
 async function fetchViaServerJob(job: Job, task: Task, item: Item): Promise<{ blob: Blob; name: string; remote?: string }> {

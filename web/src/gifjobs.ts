@@ -1,3 +1,4 @@
+import { sleep, whenVisible, emitActivity } from './lifecycle';
 // ダウンロードした動画の GIF 変換をサーバーに任せる（アプリを閉じても続き、完了時に通知）
 import { ApiError, jobFile, jobStatus, sourceExists, startGifJob, type GifJobParams } from './api';
 import { newId, putMedia, type MediaRecord } from './db';
@@ -29,6 +30,12 @@ function savePending(list: Pending[]): void {
   } catch {
     // 保存できなくても処理は続く
   }
+  emitActivity();
+}
+
+/** サーバーで変換中の GIF の件数 */
+export function pendingGifs(): number {
+  return loadPending().length;
 }
 
 /** この動画をサーバーで変換できるか（ダウンロードした動画で、サーバーにまだ残っている） */
@@ -42,11 +49,6 @@ export async function serverSourceFor(rec: MediaRecord | undefined): Promise<str
   }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-function whenVisible(): Promise<void> {
-  if (!document.hidden) return Promise.resolve();
-  return new Promise((r) => document.addEventListener('visibilitychange', () => !document.hidden && r(), { once: true }));
-}
 
 export interface GifProgress {
   ratio: number;

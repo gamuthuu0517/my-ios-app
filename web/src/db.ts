@@ -1,3 +1,5 @@
+import { emitMediaChange } from './lifecycle';
+
 // アプリ内に保存する動画・GIF（IndexedDB）
 
 export interface MediaRecord {
@@ -41,10 +43,19 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
   });
 }
 
-export const putMedia = (r: MediaRecord) => tx('readwrite', (s) => s.put(r));
+export async function putMedia(r: MediaRecord): Promise<void> {
+  await tx('readwrite', (s) => s.put(r));
+  emitMediaChange({ type: 'put', id: r.id });
+}
 export const getMedia = (id: string) => tx<MediaRecord | undefined>('readonly', (s) => s.get(id));
-export const deleteMedia = (id: string) => tx('readwrite', (s) => s.delete(id));
-export const clearMedia = () => tx('readwrite', (s) => s.clear());
+export async function deleteMedia(id: string): Promise<void> {
+  await tx('readwrite', (s) => s.delete(id));
+  emitMediaChange({ type: 'delete', id });
+}
+export async function clearMedia(): Promise<void> {
+  await tx('readwrite', (s) => s.clear());
+  emitMediaChange({ type: 'clear' });
+}
 
 export async function listMedia(): Promise<MediaRecord[]> {
   const all = await tx<MediaRecord[]>('readonly', (s) => s.getAll());

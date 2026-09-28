@@ -65,6 +65,8 @@ if (loadSettings().debugConsole) enableDebugConsole();
 
 // 閉じている間にサーバーで終わった GIF を取り込む
 resumePendingGifJobs();
+// 裏から戻ったときも、終わっていた GIF をすぐ取り込む
+document.addEventListener('visibilitychange', () => !document.hidden && resumePendingGifJobs());
 
 // アプリ内の動画が iOS に勝手に消されにくくする
 navigator.storage?.persist?.().catch(() => {});
