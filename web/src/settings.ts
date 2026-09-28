@@ -5,6 +5,8 @@ export interface Settings {
   gifDither: boolean;
   sizeWarnMB: number;
   debugConsole: boolean;
+  notifyDownload: boolean;
+  notifyGif: boolean;
 }
 
 const KEY = 'clipkit.settings.v1';
@@ -16,6 +18,8 @@ export const defaultSettings: Settings = {
   gifDither: true,
   sizeWarnMB: 20,
   debugConsole: false,
+  notifyDownload: true,
+  notifyGif: true,
 };
 
 export function loadSettings(): Settings {

@@ -7,6 +7,7 @@ import { detectFps } from '../gif/mp4info';
 import { Cancelled, encodeGif, estimateGifSize, type GifOptions } from '../gif/encoder';
 import { frameTimes, outputSize } from '../gif/timing';
 import { Trimmer, formatTime } from './trimmer';
+import { runServerGif, serverSourceFor } from '../gifjobs';
 import { ASPECTS, Cropper } from './cropper';
 import type { Rect } from '../gif/frames';
 
@@ -30,7 +31,8 @@ interface Session {
   cropEditing: boolean;
   editing: boolean; // false のときは変換結果だけを表示
   estimate?: { key: string; bytes: number | null };
-  job?: { progress: number; cancel: { cancelled: boolean }; promise: Promise<void> };
+  job?: { progress: number; label: string; cancel: { cancelled: boolean }; promise: Promise<void> };
+  serverSource?: string | null; // サーバーで変換できる場合の元動画（undefined は確認中）
   result?: { blob: Blob; id: string; opts: GifOptions };
   error?: string;
 }
@@ -95,6 +97,16 @@ async function openSource(blob: Blob, name: string, mediaId?: string): Promise<v
   };
   grabber = g;
   notify();
+  if (mediaId) {
+    const rec = await getMedia(mediaId);
+    const src = await serverSourceFor(rec);
+    if (session?.mediaId === mediaId) {
+      session.serverSource = src;
+      notify();
+    }
+  } else {
+    session.serverSource = null;
+  }
 }
 
 export function gifView(): HTMLElement {
@@ -320,42 +332,65 @@ function editor(s: Session): HTMLElement {
     const cancel = { cancelled: false };
     s.error = undefined;
     s.result = undefined;
-    const job = {
+    const name = s.name.replace(/\.[^.]+$/, '');
+    const onServer = !!s.serverSource;
+    // 進捗の通知が promise の作成中にも来るので、先に job を作ってから処理を始める
+    const job: NonNullable<Session['job']> = {
       progress: 0,
+      label: onServer ? 'サーバーに依頼中…' : '変換中…',
       cancel,
-      promise: (async () => {
+      promise: Promise.resolve(),
+    };
+    job.promise = (async () => {
+        let wake: { release(): Promise<void> } | null = null;
         try {
-          const blob = await withGrabber((g) =>
-            encodeGif(g, o, (r) => {
-              job.progress = r;
+          let out: { blob: Blob; id: string };
+          if (onServer) {
+            // ダウンロードした動画：サーバーで変換（アプリを閉じても続く）
+            out = await runServerGif(s.serverSource!, { ...o }, name, (g) => {
+              job.progress = g.ratio;
+              job.label = g.label;
               progressListeners.forEach((l) => l());
-            }, cancel),
-          );
-          const id = newId();
-          await putMedia({
-            id,
-            kind: 'gif',
-            blob,
-            name: `${s.name.replace(/\.[^.]+$/, '')}.gif`,
-            title: s.name.replace(/\.[^.]+$/, ''),
-            width: o.width,
-            height: o.height,
-            duration: o.end - o.start,
-            createdAt: Date.now(),
-          });
-          s.result = { blob, id, opts: o };
+            }, cancel);
+          } else {
+            // 写真アプリの動画：iPhone 内で変換。画面が消えると止まるので点けたままにする
+            wake = await (navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<{ release(): Promise<void> }> } })
+              .wakeLock?.request('screen')
+              .catch(() => null) ?? null;
+            const blob = await withGrabber((g) =>
+              encodeGif(g, o, (r) => {
+                job.progress = r;
+                job.label = `変換中 ${Math.round(r * 100)}%`;
+                progressListeners.forEach((l) => l());
+              }, cancel),
+            );
+            const id = newId();
+            await putMedia({
+              id,
+              kind: 'gif',
+              blob,
+              name: `${name}.gif`,
+              title: name,
+              width: o.width,
+              height: o.height,
+              duration: o.end - o.start,
+              createdAt: Date.now(),
+            });
+            out = { blob, id };
+          }
+          s.result = { blob: out.blob, id: out.id, opts: o };
           s.editing = false; // 完了したら設定を閉じて結果だけにする
           s.cropEditing = false;
         } catch (e) {
-          if (!(e instanceof Cancelled)) s.error = `変換に失敗しました：${(e as Error).message}`;
+          if (!(e instanceof Cancelled) && (e as Error).name !== 'AbortError') s.error = `変換に失敗しました：${(e as Error).message}`;
         } finally {
+          await wake?.release().catch(() => {});
           s.job = undefined;
           notify();
           // 結果だけの表示に切り替わるので先頭まで戻す
           if (s.result && !s.editing) document.querySelector('.content')?.scrollTo({ top: 0, behavior: 'smooth' });
         }
-      })(),
-    };
+      })();
     s.job = job;
     notify();
   });
@@ -367,14 +402,17 @@ function editor(s: Session): HTMLElement {
     if (bar) {
       bar.value = job.progress;
       progressBox.querySelector('.pct')!.textContent = `${Math.round(job.progress * 100)}%`;
+      progressBox.querySelector('.stage')!.textContent = job.label;
       return;
     }
     progressBox.replaceChildren(
       h('div', { class: 'card' },
-        h('div', { class: 'row between' }, h('span', { class: 'label' }, '変換中…'), h('span', { class: 'pct label' }, '0%')),
+        h('div', { class: 'row between' }, h('span', { class: 'label stage' }, job.label), h('span', { class: 'pct label' }, '0%')),
         h('progress', { class: 'progress', max: 1, value: job.progress }),
-        h('p', { class: 'muted small' }, '他のタブに移っても変換は続きます（アプリを閉じると中断します）'),
-        h('button', { class: 'btn', onclick: () => (job.cancel.cancelled = true) }, 'キャンセル'),
+        h('p', { class: 'muted small' }, s.serverSource
+          ? 'サーバーで変換しています。アプリを閉じても続き、完了すると通知が届きます（結果は履歴に入ります）。'
+          : 'iPhone 内で変換しています。完了までアプリを開いたままにしてください（他のタブへの移動は大丈夫です）。'),
+        h('button', { class: 'btn', onclick: () => (job.cancel.cancelled = true) }, s.serverSource ? '待つのをやめる' : 'キャンセル'),
       ),
     );
   };
@@ -400,6 +438,14 @@ function editor(s: Session): HTMLElement {
     ),
     h('div', { class: 'card' }, summary, warn),
     s.job ? '' : convertBtn,
+    s.job
+      ? ''
+      : h('p', { class: 'muted small center' },
+          s.serverSource === undefined && s.mediaId
+            ? '変換方法を確認中…'
+            : s.serverSource
+              ? '☁ サーバーで変換します（アプリを閉じても続き、完了時に通知）'
+              : '📱 iPhone 内で変換します（完了までアプリを開いたままにしてください）'),
     s.result && !s.job
       ? h('button', {
           class: 'btn block',

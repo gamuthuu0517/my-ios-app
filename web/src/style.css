@@ -242,3 +242,4 @@ h2.flush { margin: 0; }
 .col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .thumb.loading { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.5; } }
+.center { text-align: center; }

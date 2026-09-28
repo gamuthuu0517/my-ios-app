@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -25,6 +26,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
+
+from . import jobs, push, storage
+from .gif import GifParams, make_gif
 
 PASSPHRASE = os.environ.get("PASSPHRASE", "")
 ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGIN", "").split(",") if o.strip()]
@@ -136,6 +140,10 @@ def summarize(entry: dict, index: int | None, accept: list[str]) -> dict:
 
 
 def friendly_error(e: Exception) -> HTTPException:
+    return HTTPException(status_code=422, detail=friendly_detail(e))
+
+
+def friendly_detail(e: Exception) -> str:
     msg = str(e)
     if re.search(r"not a bot|confirm you", msg, re.I):
         detail = "サービス側にサーバーからのアクセスを拒否されました（ボット判定）。時間をおくか、別の動画でお試しください"
@@ -147,12 +155,29 @@ def friendly_error(e: Exception) -> HTTPException:
         detail = "この投稿には取得できる動画がありません"
     else:
         detail = "動画を取得できませんでした"
-    return HTTPException(status_code=422, detail=f"{detail}（{msg[-300:]}）")
+    return f"{detail}（{msg[-300:]}）"
+
+
+def _mem_limit_gib() -> float | None:
+    for f in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            v = open(f).read().strip()
+            if v.isdigit() and int(v) < 1024**4:  # 上限なしの場合は巨大な値になる
+                return round(int(v) / 1024**3, 2)
+        except OSError:
+            pass
+    return None
 
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "yt_dlp": yt_dlp.version.__version__}
+    return {
+        "ok": True,
+        "yt_dlp": yt_dlp.version.__version__,
+        "cpus": len(os.sched_getaffinity(0)),
+        "memory_gib": _mem_limit_gib(),
+        "storage": storage.enabled(),
+    }
 
 
 @app.post("/api/extract", dependencies=[Depends(require_passphrase)])
@@ -354,3 +379,115 @@ async def download(req: DownloadRequest) -> FileResponse:
         headers={"Content-Disposition": f"attachment; filename=\"video.mp4\"; filename*=UTF-8''{quote(safe_name(title))}.mp4"},
         background=BackgroundTask(shutil.rmtree, workdir, ignore_errors=True),
     )
+
+
+# ---------------------------------------------------------------------------
+# サーバー側で最後まで処理するジョブ（アプリを閉じても続き、完了時に通知する）
+
+class JobDownloadRequest(DownloadRequest):
+    title: str = "動画"
+    notify: dict | None = None  # Web Push の購読情報（通知しない場合は null）
+
+
+class GifSource(BaseModel):
+    job: str | None = None  # ダウンロードジョブの結果を使う
+    upload: str | None = None  # アップロードした動画を使う
+
+
+class JobGifRequest(BaseModel):
+    source: GifSource
+    params: GifParams
+    name: str = "animation"
+    notify: dict | None = None
+
+
+class UploadRequest(BaseModel):
+    size: int
+    contentType: str = "video/mp4"
+
+
+def require_storage() -> None:
+    if not storage.enabled():
+        raise HTTPException(status_code=503, detail="サーバーの一時保管場所（Cloud Storage）が未設定です")
+
+
+def source_object(src: GifSource) -> str | None:
+    if src.job:
+        st = jobs.get(src.job)
+        return (st or {}).get("result", {}).get("object")
+    if src.upload:
+        return f"uploads/{src.upload}/src"
+    return None
+
+
+@app.post("/api/jobs/download", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def job_download(req: JobDownloadRequest) -> dict:
+    check_url(req.url)
+
+    def runner(workdir: Path, emit):
+        path, title = fetch_video(req, workdir, emit)
+        return path, f"{safe_name(title)}.mp4", "video/mp4"
+
+    return jobs.start("download", req.title, runner, req.notify, "ダウンロードが完了しました")
+
+
+@app.post("/api/jobs/gif", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def job_gif(req: JobGifRequest) -> dict:
+    obj = source_object(req.source)
+    if not obj or not storage.exists(obj):
+        raise HTTPException(status_code=404, detail="元動画がサーバーにありません")
+
+    def runner(workdir: Path, emit):
+        src = workdir / "src"
+        emit({"type": "progress", "stage": "prepare"})
+        if not storage.download_file(obj, src):
+            raise RuntimeError("元動画を読み込めませんでした")
+        return make_gif(src, req.params, workdir, emit), f"{safe_name(req.name)}.gif", "image/gif"
+
+    return jobs.start("gif", req.name, runner, req.notify, "GIF変換が完了しました")
+
+
+@app.get("/api/jobs/{job_id}", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def job_status(job_id: str) -> dict:
+    st = jobs.get(job_id)
+    if not st:
+        raise HTTPException(status_code=404, detail="処理が見つかりません（期限切れの可能性があります）")
+    return st
+
+
+@app.get("/api/jobs/{job_id}/file", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def job_file(job_id: str) -> StreamingResponse:
+    st = jobs.get(job_id)
+    res = (st or {}).get("result")
+    if not res:
+        raise HTTPException(status_code=404, detail="ファイルがありません")
+    blob, reader = storage.open_read(res["object"])
+
+    def chunks():
+        with reader:
+            while chunk := reader.read(1024 * 1024):
+                yield chunk
+
+    return StreamingResponse(
+        chunks(),
+        media_type=res["contentType"],
+        headers={"Content-Length": str(blob.size), "Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/sources/check", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def source_check(src: GifSource) -> dict:
+    obj = source_object(src)
+    return {"exists": bool(obj and storage.exists(obj))}
+
+
+@app.post("/api/uploads", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def upload_start(req: UploadRequest, origin: str | None = Header(default=None)) -> dict:
+    upload_id = uuid.uuid4().hex
+    url = storage.resumable_upload_url(f"uploads/{upload_id}/src", req.contentType, req.size, origin)
+    return {"id": upload_id, "url": url}
+
+
+@app.get("/api/push/key", dependencies=[Depends(require_passphrase), Depends(require_storage)])
+def push_key() -> dict:
+    return {"key": push.public_key()}

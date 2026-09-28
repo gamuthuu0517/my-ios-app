@@ -7,6 +7,8 @@ import { downloadView } from './views/download';
 import { gifView } from './views/gif';
 import { historyView } from './views/history';
 import { settingsView } from './views/settings';
+import { resumePendingGifJobs } from './gifjobs';
+import './queue'; // 起動時にサーバー側で処理中のダウンロードを確認する
 
 const ICONS = {
   download: '<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>',
@@ -60,6 +62,9 @@ app.append(...[installHint, main, tabs].filter((x): x is HTMLElement => !!x));
 render();
 
 if (loadSettings().debugConsole) enableDebugConsole();
+
+// 閉じている間にサーバーで終わった GIF を取り込む
+resumePendingGifJobs();
 
 // アプリ内の動画が iOS に勝手に消されにくくする
 navigator.storage?.persist?.().catch(() => {});

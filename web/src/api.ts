@@ -22,7 +22,11 @@ export interface ExtractResult {
   items: Item[];
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, readonly status = 0) {
+    super(message);
+  }
+}
 
 function config() {
   const s = loadSettings();
@@ -31,21 +35,25 @@ function config() {
 }
 
 async function post(path: string, body: unknown): Promise<Response> {
+  return request('POST', path, body);
+}
+
+async function request(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
   const s = config();
   let res: Response;
   try {
     res = await fetch(`${s.serverUrl}${path}`, {
-      method: 'POST',
+      method,
       headers: { 'Content-Type': 'application/json', 'X-Passphrase': s.passphrase },
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
     throw new ApiError('サーバーに接続できません。電波状況とサーバーURLを確認してください');
   }
-  if (res.status === 401) throw new ApiError('合言葉が正しくありません（設定画面で確認してください）');
+  if (res.status === 401) throw new ApiError('合言葉が正しくありません（設定画面で確認してください）', 401);
   if (!res.ok) {
     const detail = await res.json().then((j) => j.detail, () => null);
-    throw new ApiError(typeof detail === 'string' ? detail : `サーバーエラー（${res.status}）`);
+    throw new ApiError(typeof detail === 'string' ? detail : `サーバーエラー（${res.status}）`, res.status);
   }
   return res;
 }
@@ -54,7 +62,7 @@ export async function extract(url: string): Promise<ExtractResult> {
   return (await post('/api/extract', { url, accept: await acceptedCodecs() })).json();
 }
 
-export type FetchStage = 'prepare' | 'download' | 'convert' | 'finalize' | 'receive';
+export type FetchStage = 'queued' | 'prepare' | 'download' | 'convert' | 'finalize' | 'store' | 'receive';
 export interface FetchProgress {
   stage: FetchStage;
   pct: number | null;
@@ -137,4 +145,97 @@ export async function fetchVideo(
   }
   if (!file || received < file.size) throw new ApiError('通信が途中で切れました。もう一度お試しください');
   return { blob: new Blob(parts as BlobPart[], { type: 'video/mp4' }), name: file.name };
+}
+
+// ---------------------------------------------------------------------------
+// サーバー側ジョブ（アプリを閉じても処理が続き、完了時に通知が届く）
+
+export interface JobStatus {
+  id: string;
+  type: 'download' | 'gif';
+  title: string;
+  state: 'queued' | 'running' | 'done' | 'error';
+  stage: string;
+  pct: number | null;
+  part?: number;
+  error?: string;
+  result?: { object: string; name: string; size: number; contentType: string };
+}
+
+export interface GifJobParams {
+  start: number;
+  end: number;
+  fps: number;
+  width: number;
+  height: number;
+  dither: boolean;
+  crop: { x: number; y: number; w: number; h: number } | null;
+}
+
+export type GifSource = { job: string } | { upload: string };
+
+export async function startDownloadJob(
+  url: string,
+  index: number | null,
+  height: number | null,
+  title: string,
+  notify: PushSubscriptionJSON | null,
+): Promise<JobStatus> {
+  return (await post('/api/jobs/download', { url, index, height, title, notify, accept: await acceptedCodecs() })).json();
+}
+
+export async function startGifJob(source: GifSource, params: GifJobParams, name: string, notify: PushSubscriptionJSON | null): Promise<JobStatus> {
+  return (await post('/api/jobs/gif', { source, params, name, notify })).json();
+}
+
+export async function jobStatus(id: string): Promise<JobStatus> {
+  return (await request('GET', `/api/jobs/${id}`)).json();
+}
+
+export async function sourceExists(source: GifSource): Promise<boolean> {
+  return (await post('/api/sources/check', source)).json().then((r) => !!r.exists);
+}
+
+export async function pushKey(): Promise<string> {
+  return (await request('GET', '/api/push/key')).json().then((r) => r.key);
+}
+
+/** 完成したファイルを受け取る（進み具合つき） */
+export async function jobFile(id: string, onProgress: (ratio: number) => void): Promise<Blob> {
+  const res = await request('GET', `/api/jobs/${id}/file`);
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  const type = res.headers.get('Content-Type') ?? 'application/octet-stream';
+  const reader = res.body?.getReader();
+  if (!reader) return res.blob();
+  const parts: Uint8Array[] = [];
+  let got = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      got += value.length;
+      if (total) onProgress(got / total);
+    }
+  } catch {
+    throw new ApiError('受信が途中で切れました。もう一度お試しください');
+  }
+  if (total && got < total) throw new ApiError('受信が途中で切れました。もう一度お試しください');
+  return new Blob(parts as BlobPart[], { type });
+}
+
+/** 動画をサーバーの一時保管場所へ直接アップロードする（大きなファイルでも可） */
+export async function uploadVideo(blob: Blob, onProgress: (ratio: number) => void): Promise<string> {
+  const type = blob.type || 'video/mp4';
+  const { id, url } = await (await post('/api/uploads', { size: blob.size, contentType: type })).json();
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Content-Type', type);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new ApiError(`アップロードに失敗しました（${xhr.status}）`)));
+    xhr.onerror = () => reject(new ApiError('アップロードに失敗しました。電波状況を確認してください'));
+    xhr.send(blob);
+  });
+  return id;
 }

@@ -2,6 +2,7 @@ import { h, toast, isStandalone, formatBytes } from '../dom';
 import { loadSettings, saveSettings, type Settings } from '../settings';
 import { enableDebugConsole } from '../debug';
 import { acceptedCodecs } from '../codecs';
+import { enableNotifications, permission } from '../notify';
 
 function field(label: string, control: HTMLElement, note?: string): HTMLElement {
   return h('label', { class: 'field' }, h('span', { class: 'label' }, label), control, note ? h('span', { class: 'muted small' }, note) : null);
@@ -16,6 +17,35 @@ export function settingsView(): HTMLElement {
   const warn = h('input', { type: 'number', class: 'input', min: 1, max: 500, value: s.sizeWarnMB, inputmode: 'numeric' });
   const dither = h('input', { type: 'checkbox', checked: s.gifDither });
   const debug = h('input', { type: 'checkbox', checked: s.debugConsole });
+  const notifyDl = h('input', { type: 'checkbox', checked: s.notifyDownload });
+  const notifyGif = h('input', { type: 'checkbox', checked: s.notifyGif });
+
+  // 通知の許可状態と、許可するボタン
+  const notifyState = h('div', { class: 'muted small' });
+  const allowBtn = h('button', { class: 'btn small' }, '通知を許可する');
+  const refreshNotify = () => {
+    const p = permission();
+    allowBtn.classList.toggle('hidden', p === 'granted' || p === 'denied' || p === 'unsupported');
+    notifyState.textContent =
+      p === 'granted'
+        ? '通知：許可済み'
+        : p === 'denied'
+          ? '通知：拒否されています（iPhone の「設定」→「通知」→「ClipKit」で許可してください）'
+          : p === 'unsupported'
+            ? isStandalone()
+              ? '通知：この端末では使えません（iOS 16.4 以降が必要です）'
+              : '通知：ホーム画面に追加したアプリから開くと使えます'
+            : '通知：まだ許可されていません';
+  };
+  allowBtn.addEventListener('click', async () => {
+    try {
+      toast((await enableNotifications()) ? '通知を許可しました' : '通知が許可されませんでした');
+    } catch (e) {
+      toast(`通知を設定できませんでした：${(e as Error).message}`);
+    }
+    refreshNotify();
+  });
+  refreshNotify();
 
   const save = () => {
     const next: Settings = {
@@ -25,6 +55,8 @@ export function settingsView(): HTMLElement {
       sizeWarnMB: Math.max(1, Math.round(Number(warn.value) || 20)),
       gifDither: dither.checked,
       debugConsole: debug.checked,
+      notifyDownload: notifyDl.checked,
+      notifyGif: notifyGif.checked,
     };
     saveSettings(next);
     if (next.debugConsole) enableDebugConsole();
@@ -57,6 +89,15 @@ export function settingsView(): HTMLElement {
       field('解像度（%）', scale),
       field('容量の注意表示（MB 以上）', warn),
       h('label', { class: 'switch' }, dither, h('span', {}, 'ディザリング')),
+    ),
+    h(
+      'div',
+      { class: 'card' },
+      h('h2', {}, '完了通知'),
+      h('label', { class: 'switch' }, notifyDl, h('span', {}, 'ダウンロード完了を通知')),
+      h('label', { class: 'switch' }, notifyGif, h('span', {}, 'GIF変換完了を通知（ダウンロードした動画のみ）')),
+      h('div', { class: 'row between' }, notifyState, allowBtn),
+      h('p', { class: 'muted small' }, 'サーバーで処理するので、アプリを閉じても処理は続き、完了すると通知が届きます。写真アプリの動画の GIF 変換は iPhone 内で行うため、アプリを開いたままにしてください。'),
     ),
     h(
       'div',

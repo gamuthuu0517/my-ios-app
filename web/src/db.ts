@@ -13,6 +13,7 @@ export interface MediaRecord {
   duration?: number;
   savedToPhotos?: boolean;
   thumb?: Blob;
+  remote?: { job: string; at: number }; // サーバーの一時保管場所にある同じ動画（GIF 変換に使う・1日で消える）
   createdAt: number;
 }
 

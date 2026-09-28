@@ -1,5 +1,18 @@
 // ダウンロードの順番待ち（キュー）。画面を切り替えても状態が残るよう、画面とは別に持つ。
-import { extract, fetchVideo, ApiError, type ExtractResult, type FetchProgress, type Item } from './api';
+import {
+  extract,
+  fetchVideo,
+  jobFile,
+  jobStatus,
+  startDownloadJob,
+  ApiError,
+  type ExtractResult,
+  type FetchProgress,
+  type FetchStage,
+  type Item,
+} from './api';
+import { subscriptionFor } from './notify';
+import { toast } from './dom';
 import { putMedia, newId } from './db';
 import { makeVideoThumb } from './thumb';
 
@@ -12,6 +25,7 @@ export interface Task {
   progress?: FetchProgress;
   error?: string;
   mediaId?: string;
+  serverJob?: string; // サーバー側で処理中のジョブ（アプリを閉じても続く）
 }
 
 export interface Job {
@@ -40,7 +54,9 @@ function load(): Job[] {
     // アプリが閉じられて中断したものは、再試行できる状態にする
     for (const j of list) {
       for (const t of j.tasks) {
-        if (t.status === 'running' || t.status === 'queued') {
+        // サーバー側で処理中のものは、開き直したら続きから確認する
+        if (t.status === 'running' && t.serverJob) continue;
+        if (t.status === 'running') {
           t.status = 'error';
           t.error = 'アプリが閉じられたため中断しました';
           t.progress = undefined;
@@ -178,16 +194,66 @@ function pump(): void {
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** アプリが表示されるまで待つ（裏にある間は iOS に止められるので問い合わせない） */
+function whenVisible(): Promise<void> {
+  if (!document.hidden) return Promise.resolve();
+  return new Promise((r) => document.addEventListener('visibilitychange', () => !document.hidden && r(), { once: true }));
+}
+
+/** サーバーにダウンロードを任せ、終わったら受け取る。サーバーに一時保管場所が無ければ従来の方式 */
+async function fetchViaServerJob(job: Job, task: Task, item: Item): Promise<{ blob: Blob; name: string; remote?: string }> {
+  if (!task.serverJob) {
+    try {
+      const st = await startDownloadJob(job.url, item.index, task.height, item.title, subscriptionFor('download'));
+      task.serverJob = st.id;
+      emit(job);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 503) {
+        return fetchVideo(job.url, item.index, task.height, (p) => {
+          task.progress = p;
+          emit(job);
+        });
+      }
+      throw e;
+    }
+  }
+  let failures = 0;
+  for (;;) {
+    await whenVisible();
+    let st;
+    try {
+      st = await jobStatus(task.serverJob!);
+      failures = 0;
+    } catch (e) {
+      // 電波が一時的に悪いだけなら待って再確認する
+      if (e instanceof ApiError && e.status && e.status !== 503) throw e;
+      if (++failures > 20) throw e;
+      await sleep(3000);
+      continue;
+    }
+    if (st.state === 'error') throw new ApiError(st.error ?? 'サーバーでの処理に失敗しました');
+    if (st.state === 'done') {
+      const blob = await jobFile(st.id, (r) => {
+        task.progress = { stage: 'receive', pct: Math.round(r * 100) };
+        emit(job);
+      });
+      return { blob, name: st.result?.name ?? 'video.mp4', remote: st.id };
+    }
+    task.progress = { stage: (st.stage as FetchStage) ?? 'prepare', pct: st.pct, part: st.part };
+    emit(job);
+    await sleep(1500);
+  }
+}
+
 async function runTask(job: Job, task: Task): Promise<void> {
   const item = job.info!.items[task.itemIdx];
   task.status = 'running';
-  task.progress = { stage: 'prepare', pct: null };
+  task.progress ??= { stage: 'prepare', pct: null };
   emit(job);
   try {
-    const { blob, name } = await fetchVideo(job.url, item.index, task.height, (p) => {
-      task.progress = p;
-      emit(job);
-    });
+    const { blob, name, remote } = await fetchViaServerJob(job, task, item);
     const id = newId();
     await putMedia({
       id,
@@ -200,14 +266,17 @@ async function runTask(job: Job, task: Task): Promise<void> {
       height: task.height ?? item.height,
       duration: item.duration,
       thumb: await makeVideoThumb(blob),
+      remote: remote ? { job: remote, at: Date.now() } : undefined,
       createdAt: Date.now(),
     });
+    if (document.hidden === false && task.serverJob) toast(`ダウンロード完了：${item.title.slice(0, 30)}`);
     task.status = 'done';
     task.mediaId = id;
     task.progress = undefined;
   } catch (e) {
     task.status = 'error';
     task.error = e instanceof ApiError ? e.message : `エラーが発生しました：${(e as Error).message}`;
+    task.serverJob = undefined;
   }
   emit(job);
   pump();
@@ -220,6 +289,7 @@ export function taskPercent(t: Task): number {
   if (!p) return 0;
   const pct = p.pct ?? 0;
   switch (p.stage) {
+    case 'queued':
     case 'prepare':
       return 0;
     case 'download':
@@ -227,6 +297,8 @@ export function taskPercent(t: Task): number {
     case 'convert':
     case 'finalize':
       return 60 + pct * 0.3;
+    case 'store':
+      return 88;
     case 'receive':
       return 90 + pct * 0.1;
   }
@@ -245,12 +317,19 @@ export function stageText(t: Task): string {
       return `iPhone用に変換中${pct}`;
     case 'finalize':
       return `仕上げ中${pct}`;
+    case 'store':
+      return 'サーバーに保存中…';
     case 'receive':
       return `受信中${pct}`;
+    case 'queued':
+      return 'サーバーで順番待ち（アプリを閉じても続きます）';
     default:
-      return 'サーバーで準備中…';
+      return 'サーバーで準備中…（アプリを閉じても続きます）';
   }
 }
 
 // 解析中に閉じられたものは、次回起動時に解析し直す
 for (const j of jobs) if (j.status === 'analyzing') void analyze(j);
+// サーバー側で処理中だったものは続きから確認し、順番待ちのものは再開する
+for (const j of jobs) for (const t of j.tasks) if (t.status === 'running' && t.serverJob) void runTask(j, t);
+pump();
