@@ -11,7 +11,8 @@ from functools import lru_cache
 from . import storage
 
 KEY_OBJECT = "config/vapid_private.pem"
-SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:clipkit@example.com")
+# 通知サービスに伝える連絡先（アプリの URL）
+SUBJECT = os.environ.get("VAPID_SUBJECT", "https://gamuthuu0517.github.io/my-ios-app/")
 log = logging.getLogger("push")
 
 
