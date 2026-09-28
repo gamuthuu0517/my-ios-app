@@ -251,7 +251,7 @@ class JobCard {
       const select = h('select', { class: 'input select', disabled: !!locked });
       if (item.qualities.length === 0) select.append(h('option', { value: '' }, '最高画質'));
       for (const q of item.qualities) {
-        select.append(h('option', { value: String(q.height) }, `${q.height}p${q.h264 ? '' : '（要変換・時間がかかります）'}`));
+        select.append(h('option', { value: String(q.height) }, `${q.height}p${(q.direct ?? q.h264) ? '' : '（要変換・時間がかかります）'}`));
       }
       select.value = j.quality[idx] ?? '';
       select.addEventListener('change', () => (j.quality[idx] = select.value));

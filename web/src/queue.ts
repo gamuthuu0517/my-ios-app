@@ -79,9 +79,9 @@ export function getJobs(): Job[] {
   return jobs;
 }
 
-/** 画質の初期値：変換不要（H.264）で取れる最高画質。なければ最高画質 */
+/** 画質の初期値：変換不要（端末が扱える形式）で取れる最高画質。なければ最高画質 */
 export function defaultQuality(item: Item): string {
-  const q = item.qualities.find((x) => x.h264) ?? item.qualities[0];
+  const q = item.qualities.find((x) => x.direct ?? x.h264) ?? item.qualities[0];
   return q ? String(q.height) : '';
 }
 

@@ -1,8 +1,10 @@
 import { loadSettings } from './settings';
+import { acceptedCodecs } from './codecs';
 
 export interface Quality {
   height: number;
-  h264: boolean;
+  direct?: boolean; // 変換なしで端末に渡せる
+  h264: boolean; // 旧サーバー互換（direct と同じ意味）
 }
 export interface Item {
   index: number | null;
@@ -49,7 +51,7 @@ async function post(path: string, body: unknown): Promise<Response> {
 }
 
 export async function extract(url: string): Promise<ExtractResult> {
-  return (await post('/api/extract', { url })).json();
+  return (await post('/api/extract', { url, accept: await acceptedCodecs() })).json();
 }
 
 export type FetchStage = 'prepare' | 'download' | 'convert' | 'finalize' | 'receive';
@@ -76,7 +78,7 @@ export async function fetchVideo(
     res = await fetch(`${s.serverUrl}/api/fetch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Passphrase': s.passphrase },
-      body: JSON.stringify({ url, index, height }),
+      body: JSON.stringify({ url, index, height, accept: await acceptedCodecs() }),
       signal,
     });
   } catch {

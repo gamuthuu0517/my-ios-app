@@ -51,14 +51,20 @@ def require_passphrase(x_passphrase: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="合言葉が正しくありません")
 
 
+# 端末がそのまま再生・保存できる映像コーデック（アプリが端末を調べて送ってくる）
+Codec = str  # "h264" | "hevc" | "av1"
+
+
 class ExtractRequest(BaseModel):
     url: str
+    accept: list[Codec] = ["h264"]
 
 
 class DownloadRequest(BaseModel):
     url: str
     index: int | None = None  # 複数動画の投稿で何番目か（0 始まり）
     height: int | None = None  # 画質（縦の画素数）。None なら最高画質
+    accept: list[Codec] = ["h264"]
 
 
 def check_url(url: str) -> str:
@@ -81,21 +87,42 @@ def base_opts() -> dict:
     }
 
 
-def is_h264(vcodec: str | None) -> bool:
-    return bool(vcodec) and vcodec.split(".")[0] in ("avc1", "avc3", "h264")
+def codec_family(vcodec: str | None) -> str | None:
+    """yt-dlp の vcodec 表記を h264 / hevc / av1 / vp9 などにまとめる。不明なら None"""
+    if not vcodec or vcodec == "none":
+        return None
+    c = vcodec.lower().split(".")[0]
+    if c in ("avc1", "avc3", "h264"):
+        return "h264"
+    if c in ("hvc1", "hev1", "h265", "hevc", "bytevc1"):
+        return "hevc"
+    if c in ("av01", "av1"):
+        return "av1"
+    if c.startswith("vp"):
+        return "vp9"
+    return c
 
 
-def quality_options(info: dict) -> list[dict]:
+def is_direct(f: dict, accept: list[str]) -> bool:
+    """変換せずに端末へ渡せそうか。コーデック不明の mp4 は H.264 のことが多い（Instagram など）ので候補に含める"""
+    fam = codec_family(f.get("vcodec"))
+    if fam is None:
+        return f.get("ext") in ("mp4", "mov", None)
+    return fam in accept
+
+
+def quality_options(info: dict, accept: list[str]) -> list[dict]:
     heights: dict[int, bool] = {}
     for f in info.get("formats") or []:
         h = f.get("height")
         if not h or f.get("vcodec") == "none":
             continue
-        heights[h] = heights.get(h, False) or is_h264(f.get("vcodec"))
-    return [{"height": h, "h264": ok} for h, ok in sorted(heights.items(), reverse=True)]
+        heights[h] = heights.get(h, False) or is_direct(f, accept)
+    # h264 は旧バージョンのアプリ向け（意味は「変換不要」）
+    return [{"height": h, "direct": ok, "h264": ok} for h, ok in sorted(heights.items(), reverse=True)]
 
 
-def summarize(entry: dict, index: int | None) -> dict:
+def summarize(entry: dict, index: int | None, accept: list[str]) -> dict:
     return {
         "index": index,
         "id": entry.get("id"),
@@ -104,7 +131,7 @@ def summarize(entry: dict, index: int | None) -> dict:
         "duration": entry.get("duration"),
         "width": entry.get("width"),
         "height": entry.get("height"),
-        "qualities": quality_options(entry),
+        "qualities": quality_options(entry, accept),
     }
 
 
@@ -143,9 +170,9 @@ async def extract(req: ExtractRequest) -> dict:
 
     if info.get("_type") == "playlist":
         entries = [e for e in (info.get("entries") or []) if e]
-        items = [summarize(e, i) for i, e in enumerate(entries)]
+        items = [summarize(e, i, req.accept) for i, e in enumerate(entries)]
     else:
-        items = [summarize(info, None)]
+        items = [summarize(info, None, req.accept)]
     if not items:
         raise HTTPException(status_code=422, detail="この投稿には取得できる動画がありません")
     return {"title": info.get("title"), "extractor": info.get("extractor_key"), "items": items}
@@ -163,11 +190,17 @@ def probe(path: Path) -> tuple[str, str, float]:
     return v, a, float(data.get("format", {}).get("duration") or 0)
 
 
-def to_iphone_mp4(src: Path, dst: Path, emit=lambda _: None) -> Path:
-    """写真アプリで扱える H.264 + AAC の mp4 にそろえる（既にそうなら再エンコードしない）"""
+def to_iphone_mp4(src: Path, dst: Path, accept: list[str], emit=lambda _: None) -> Path:
+    """端末で再生・保存できる mp4 にそろえる。端末が扱えるコーデックなら再エンコードせず入れ物だけ整える"""
     v, a, duration = probe(src)
-    transcode = v != "h264"
-    vargs = ["-c:v", "copy"] if not transcode else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
+    fam = {"h264": "h264", "hevc": "hevc", "av1": "av1"}.get(v)
+    transcode = fam is None or fam not in accept
+    if not transcode:
+        vargs = ["-c:v", "copy"]
+        if fam == "hevc":
+            vargs += ["-tag:v", "hvc1"]  # Apple 製品は hvc1 タグでないと再生できない
+    else:
+        vargs = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "0"]
     aargs = ["-c:a", "copy"] if a in ("aac", "") else ["-c:a", "aac", "-b:a", "192k"]
     emit({"type": "progress", "stage": "convert" if transcode else "finalize", "pct": 0})
     proc = subprocess.Popen(
@@ -206,8 +239,8 @@ def fetch_video(req: "DownloadRequest", workdir: Path, emit=lambda _: None) -> t
     opts = {
         **base_opts(),
         "outtmpl": str(workdir / "src.%(ext)s"),
-        "format": "bv*+ba/b",
-        # 指定画質以下で最大のものを選び、同じ画質なら H.264 / AAC / mp4 を優先する
+        "format": format_selector(req.height, req.accept),
+        # 同じ条件の中では画質の高いものを選び、同じ画質なら H.264 / AAC / mp4 を優先する
         "format_sort": [res, "vcodec:h264", "acodec:aac", "ext:mp4:m4a"],
         "merge_output_format": "mp4",
         "progress_hooks": [hook],
@@ -224,9 +257,21 @@ def fetch_video(req: "DownloadRequest", workdir: Path, emit=lambda _: None) -> t
     src = next((p for p in workdir.iterdir() if p.name.startswith("src.")), None)
     if src is None:
         raise yt_dlp.utils.DownloadError("no media downloaded")
-    out = to_iphone_mp4(src, workdir / "out.mp4", emit)
+    out = to_iphone_mp4(src, workdir / "out.mp4", req.accept, emit)
     src.unlink(missing_ok=True)
     return out, info.get("title") or info.get("id") or "video"
+
+
+def format_selector(height: int | None, accept: list[str]) -> str:
+    """変換せずに済む形式（端末が扱えるコーデック・不明な mp4）を優先し、無ければ何でも取って後で変換する"""
+    hf = f"[height<=?{height}]" if height else ""
+    # 「?」はコーデック不明のものも通す指定
+    ng = "[vcodec!*=?vp]"
+    if "av1" not in accept:
+        ng += "[vcodec!*=?av01]"
+    if "hevc" not in accept:
+        ng += "[vcodec!*=?hvc1][vcodec!*=?hev1][vcodec!*=?h265][vcodec!*=?hevc]"
+    return f"bv*{hf}{ng}+ba/b{hf}{ng}/bv*{hf}+ba/b{hf}/bv*+ba/b"
 
 
 def safe_name(title: str) -> str:

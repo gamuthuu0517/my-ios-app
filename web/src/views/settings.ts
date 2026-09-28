@@ -1,6 +1,7 @@
 import { h, toast, isStandalone, formatBytes } from '../dom';
 import { loadSettings, saveSettings, type Settings } from '../settings';
 import { enableDebugConsole } from '../debug';
+import { acceptedCodecs } from '../codecs';
 
 function field(label: string, control: HTMLElement, note?: string): HTMLElement {
   return h('label', { class: 'field' }, h('span', { class: 'label' }, label), control, note ? h('span', { class: 'muted small' }, note) : null);
@@ -31,6 +32,8 @@ export function settingsView(): HTMLElement {
   };
 
   const storage = h('span', {}, '計算中…');
+  const codecs = h('span', {}, '確認中…');
+  void acceptedCodecs().then((c) => (codecs.textContent = c.map((x) => ({ h264: 'H.264', hevc: 'HEVC', av1: 'AV1' })[x] ?? x).join(' / ')));
   navigator.storage
     ?.estimate?.()
     .then((e) => (storage.textContent = `${formatBytes(e.usage ?? 0)} 使用中`))
@@ -69,6 +72,7 @@ export function settingsView(): HTMLElement {
       h('div', { class: 'muted small' }, `ビルド ${new Date(__BUILD_TIME__).toLocaleString('ja-JP')}`),
       h('div', { class: 'muted small' }, `起動モード：${isStandalone() ? 'ホーム画面アプリ' : 'ブラウザ'}`),
       h('div', { class: 'muted small' }, 'アプリ内ストレージ：', storage),
+      h('div', { class: 'muted small' }, '変換なしで扱える形式：', codecs),
     ),
   );
 }
